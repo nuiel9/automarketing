@@ -32,6 +32,8 @@ class ContentItem(Base):
     media_token: Mapped[str | None] = mapped_column(
         String(32), nullable=True, unique=True, default=lambda: secrets.token_urlsafe(16)
     )
+    scenario: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    render_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     channels: Mapped[list] = mapped_column(JSON, default=list)
     reject_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

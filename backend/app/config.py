@@ -19,6 +19,18 @@ class Settings(BaseSettings):
     caption_provider: str = "gemini"      # "gemini" | "anthropic"
     gemini_api_key: str = ""
     gemini_model: str = "gemini-3.6-flash"
+
+    tips_model: str = "gemini-3.6-flash"
+    tts_model: str = "gemini-3.1-flash-tts-preview"
+    kavee_voice: str = "Charon"
+
+    render_dispatcher: str = "cloudrun"     # "cloudrun" | "local"
+    gcp_project: str = ""
+    render_job_name: str = "automarketing-render"
+    render_job_region: str = "asia-southeast1"
+
+    demo_email: str = ""
+    demo_password: str = ""
     anthropic_api_key: str = ""
 
     enabled_channels: str = "dryrun"      # comma-separated: facebook,instagram,x,line,dryrun

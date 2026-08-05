@@ -31,3 +31,10 @@ def test_valid_transitions(src, dst):
 def test_invalid_transitions_raise(src, dst):
     with pytest.raises(InvalidTransition):
         transition(make(src), dst)
+
+
+@pytest.mark.parametrize("src,dst", [("idea", "rendering"), ("failed", "rendering")])
+def test_render_transitions_allowed(src, dst):
+    item = make(src)
+    transition(item, dst)
+    assert item.status == dst

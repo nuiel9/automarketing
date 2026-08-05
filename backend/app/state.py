@@ -1,14 +1,14 @@
 from app.models import ContentItem
 
 ITEM_TRANSITIONS: dict[str, set[str]] = {
-    "idea": {"in_review"},
+    "idea": {"in_review", "rendering"},
     "planned": {"rendering", "rejected"},      # Phase 2+
     "rendering": {"in_review", "failed"},      # Phase 2+
     "in_review": {"approved", "rejected"},
     "approved": {"scheduled"},
     "scheduled": {"posted", "failed"},
     "posted": set(),
-    "failed": {"scheduled"},
+    "failed": {"scheduled", "rendering"},
     "rejected": {"in_review"},
 }
 

@@ -16,3 +16,16 @@ def test_item_caption_publication_roundtrip(db):
     assert loaded.captions[0].hashtags == ["#TGAT"]
     assert loaded.publications[0].status == "pending"
     assert loaded.publications[0].attempts == 0
+
+
+def test_item_carries_scenario_and_render_error(db):
+    item = ContentItem(
+        slug="w32-demo-tgat", topic="t", status="idea",
+        format="demo", scenario="tgat-demo", render_error=None,
+    )
+    db.add(item)
+    db.commit()
+    loaded = db.get(ContentItem, item.id)
+    assert loaded.format == "demo"
+    assert loaded.scenario == "tgat-demo"
+    assert loaded.render_error is None
