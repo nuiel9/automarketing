@@ -185,6 +185,10 @@ def approve(item_id: str, body: ApproveBody, session: Session = Depends(get_sess
     item = _get(item_id, session)
     if not body.channels:
         raise HTTPException(422, "channels must not be empty")
+    enabled = set(get_settings().channels())
+    not_enabled = [ch for ch in body.channels if ch not in enabled]
+    if not_enabled:
+        raise HTTPException(422, f"channels not enabled: {', '.join(not_enabled)}")
     strategy = load_strategy(get_settings().strategy_path)
     violations = banned_violations(
         strategy, [c.body for c in item.captions] + [c.title or "" for c in item.captions]

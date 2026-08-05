@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 import app.api.items as items_api
+from app.config import get_settings
 from app.strategy import Strategy
 from tests.test_captions import FAKE
 
@@ -14,6 +15,13 @@ STRATEGY = Strategy(voice="v", audiences=["a"], banned_words=["ห้ามค�
 def patch_deps(monkeypatch):
     monkeypatch.setattr(items_api, "write_captions", lambda topic, hook, strategy: FAKE)
     monkeypatch.setattr(items_api, "load_strategy", lambda path: STRATEGY)
+    # Existing tests approve with facebook/instagram/x/line/dryrun; the approve
+    # endpoint now rejects any channel not in Settings.channels(), so those
+    # channels must actually be enabled here rather than relying on the
+    # "dryrun"-only default.
+    monkeypatch.setattr(
+        get_settings(), "enabled_channels", "facebook,instagram,x,line,dryrun"
+    )
 
 
 def _create(client, **extra):
@@ -62,6 +70,20 @@ def test_approve_rejects_empty_channels(client_with_db):
     )
     assert resp.status_code == 422
     assert "channels" in resp.text
+    get_resp = client_with_db.get(f"/api/items/{item['id']}", headers=AUTH)
+    assert get_resp.json()["status"] == "in_review"
+
+
+def test_approve_rejects_not_enabled_channel(client_with_db):
+    item = _create(client_with_db).json()
+    when = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+    resp = client_with_db.post(
+        f"/api/items/{item['id']}/approve",
+        json={"scheduled_at": when, "channels": ["tiktok"]},
+        headers=AUTH,
+    )
+    assert resp.status_code == 422
+    assert "tiktok" in resp.text
     get_resp = client_with_db.get(f"/api/items/{item['id']}", headers=AUTH)
     assert get_resp.json()["status"] == "in_review"
 
