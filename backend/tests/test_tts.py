@@ -42,6 +42,12 @@ def test_synthesize_writes_wav_and_measures_duration(tmp_path, monkeypatch):
     with wave.open(n.path) as w:
         assert w.getnchannels() == 1 and w.getframerate() == 24_000
     assert fake.models.kwargs["model"] == "gemini-3.1-flash-tts-preview"
+    voice_config = fake.models.kwargs["config"].speech_config.voice_config
+    assert voice_config.prebuilt_voice_config.voice_name == "Charon"
+
+
+def test_client_is_lru_cached():
+    assert hasattr(tts._client, "cache_info")
 
 
 def test_synthesize_is_cached_by_text(tmp_path, monkeypatch):
