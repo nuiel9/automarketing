@@ -41,11 +41,10 @@ AutoMarketing uses Meta's Graph API to publish directly to your Facebook Page an
    - Go to https://developers.facebook.com/tools/explorer
    - In the dropdown at the top, select your app name
    - Make sure the page selector shows your Facebook Page
-   - Click "Generate Access Token"
-   - A dialog appears; click "Get Token" and authenticate with your Facebook account
+   - Look for an option to generate an access token; labels may differ as the console changes
+   - Authenticate with your Facebook account
    - Copy the token (it will be very long)
-   - Click "Page Tokens" → "Get Token" to convert it to a long-lived token (lasts ~60 days)
-   - Copy the long-lived token
+   - Look for an option to convert it to a long-lived token (lasts ~60 days); copy the result
 
 7. **Get Your Page ID and Instagram User ID**
    - While in the Graph API Explorer (same URL as above), make a GET request to `me`
@@ -104,9 +103,9 @@ AutoMarketing uses X's API to publish posts to your brand account. X offers a fr
 
 5. **Generate Access Token and Secret**
    - Go to the "Keys and tokens" tab
-   - Under "Authentication Tokens and Keys", click "Generate"
-   - Select "User context" → Read and Write
-   - Complete the OAuth flow (you'll be redirected to authorize)
+   - Look for an option to generate authentication tokens
+   - Select "User context" and Read and Write permissions
+   - Complete the authorization flow
    - Copy:
      - Access Token → `X_ACCESS_TOKEN`
      - Access Token Secret → `X_ACCESS_TOKEN_SECRET`
@@ -118,7 +117,7 @@ AutoMarketing uses X's API to publish posts to your brand account. X offers a fr
    - `X_ACCESS_TOKEN_SECRET`: From step 5
 
 ### Notes
-- X's free tier limits you to 300 posts per month (enough for 10 posts/day)
+- The free tier's monthly post cap is limited but comfortably covers our ~16 posts/month; check current limits at developer.x.com when you create the app.
 - The user context approach means AutoMarketing posts as you (your brand account)
 
 ---
@@ -181,11 +180,8 @@ YouTube requires API approval (audit) for the `youtube.upload` scope, which lets
 - This allows testing without public exposure
 - Once audit clears, you can set videos to public via the API
 
-### Environment Variables
-- `YOUTUBE_PROJECT_ID`: From your Google Cloud Project (visible in console)
-- `YOUTUBE_CLIENT_ID`: From the OAuth credential JSON
-- `YOUTUBE_CLIENT_SECRET`: From the OAuth credential JSON
-- (These will be documented more fully when the adapter lands in Phase 2)
+### Storing Your Credentials
+Store the credentials you created (Google Cloud Project ID, OAuth Client ID, and Client Secret) in your password manager — the corresponding env vars ship with the Phase 2 adapters.
 
 ---
 
@@ -240,11 +236,8 @@ TikTok requires audit approval for the Content Posting API. Like YouTube, **file
 - You manually review and publish from TikTok
 - This is our planned interim behavior — it's safe and controllable
 
-### Environment Variables
-- `TIKTOK_CLIENT_KEY`: From your app credentials
-- `TIKTOK_CLIENT_SECRET`: From your app credentials
-- `TIKTOK_ACCOUNT_ID`: Your TikTok account ID (visible in app dashboard or your account settings)
-- (Full details when Phase 2 adapter lands)
+### Storing Your Credentials
+Store the credentials you created (app client key, client secret, and account ID) in your password manager — the corresponding env vars ship with the Phase 2 adapters.
 
 ---
 
@@ -256,21 +249,17 @@ You already have a LINE OA (Official Account) for Eduverse. We'll reuse its exis
 ### Steps
 
 1. **Get the Existing LINE OA Channel Access Token**
-   - Go to your LINE Business Center: https://business.line.biz/
-   - Navigate to your Eduverse Official Account (or whichever account you're using)
-   - Go to Settings → Basic Settings
-   - Scroll to "Channel Access Token"
-   - Copy the existing long-lived access token
+   - Go to LINE Developers Console: https://developers.line.biz/
+   - Select the Eduverse provider account
+   - Navigate to the Messaging API channel
+   - Go to the "Messaging API" tab
+   - Look for "Channel Access Token" and click to issue a long-lived token
+   - Copy the token
    - This is your `LINE_CHANNEL_ACCESS_TOKEN`
 
 2. **Get Your Personal LINE User ID**
-   - Your support-bot webhook logs contain your LINE user ID (from Eduverse)
-   - If you don't have access to those logs:
-     - Use LINE's Contact Lookup: In LINE, search for your bot account
-     - Add it as a contact
-     - Send it a message with the text `get-user-id`
-     - The bot will respond with your user ID (if configured)
-   - Alternatively, ask an engineer to extract your user ID from the support-bot logs
+   - Your support-bot's webhook events (stored in message logs or database) contain your LINE user ID
+   - Ask an engineer to extract your user ID from the support-bot's webhook logs
    - This is your `LINE_FOUNDER_USER_ID`
 
 3. **Check Broadcast Quota**
@@ -305,14 +294,8 @@ Copy the values you've obtained into your `.env` file:
 | `X_CONSUMER_SECRET` | X Developer Dashboard (API Key Secret) |
 | `X_ACCESS_TOKEN` | X Developer Dashboard (User Context token) |
 | `X_ACCESS_TOKEN_SECRET` | X Developer Dashboard (User Context secret) |
-| `YOUTUBE_PROJECT_ID` | Google Cloud Console (Project ID) |
-| `YOUTUBE_CLIENT_ID` | Google Cloud Credentials (OAuth JSON) |
-| `YOUTUBE_CLIENT_SECRET` | Google Cloud Credentials (OAuth JSON) |
-| `TIKTOK_CLIENT_KEY` | TikTok Developer Dashboard |
-| `TIKTOK_CLIENT_SECRET` | TikTok Developer Dashboard |
-| `TIKTOK_ACCOUNT_ID` | Your TikTok account ID |
-| `LINE_CHANNEL_ACCESS_TOKEN` | LINE Business Center (existing Eduverse token) |
-| `LINE_FOUNDER_USER_ID` | Support-bot logs or LINE bot lookup |
+| `LINE_CHANNEL_ACCESS_TOKEN` | LINE Developers Console (long-lived Eduverse channel token) |
+| `LINE_FOUNDER_USER_ID` | Support-bot webhook logs |
 
 ---
 
