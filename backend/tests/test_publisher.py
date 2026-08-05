@@ -72,6 +72,61 @@ def test_pending_external_stores_state_and_resumes(db):
     assert adapter.requests[1].state == {"creation_id": "c9"}
 
 
+def test_pending_external_times_out_after_max_age(db):
+    # A publication that has been sitting in pending_external (e.g. an IG
+    # Reels container stuck IN_PROGRESS, or one whose status the adapter
+    # never resolves) must not poll forever. Once its scheduled_at is more
+    # than PENDING_MAX_AGE (1h) in the past, the tick that would otherwise
+    # re-pend it must instead fail it and notify, so the item doesn't sit in
+    # "scheduled" indefinitely.
+    item, pub = seed(db, channel="instagram", scheduled=NOW - timedelta(hours=2))
+    pub.status = "pending_external"
+    pub.external_state = {"creation_id": "c9"}
+    db.commit()
+    adapter = StubAdapter([PublishOutcome(status="pending", state={"creation_id": "c9"})])
+    notes = []
+    report = run_tick(db, {"instagram": adapter}, NOW, notify=notes.append)
+    assert report["failed"] == 1
+    assert report["pending"] == 0
+    assert pub.status == "failed"
+    assert pub.last_error == "pending timeout after 1h"
+    assert item.status == "failed"
+    assert len(notes) == 1 and "timeout" in notes[0]
+
+
+def test_first_pending_outcome_not_timed_out_even_if_scheduled_at_is_old(db):
+    # The timeout guard must only apply to a publication that has already
+    # entered pending_external at least once. A publication still in
+    # "pending" whose scheduled_at happens to be >1h old (e.g. it missed a
+    # cron window, or is being retried an hour after an earlier auth pause)
+    # is getting its *first* pending outcome here and must be allowed to
+    # start polling, not be failed before ever checking status once.
+    item, pub = seed(db, channel="instagram", scheduled=NOW - timedelta(hours=2))
+    assert pub.status == "pending"
+    adapter = StubAdapter([PublishOutcome(status="pending", state={"creation_id": "c9"})])
+    report = run_tick(db, {"instagram": adapter}, NOW, notify=lambda m: None)
+    assert report["pending"] == 1
+    assert report["failed"] == 0
+    assert pub.status == "pending_external"
+    assert pub.external_state == {"creation_id": "c9"}
+
+
+def test_pending_external_within_max_age_still_repends(db):
+    # Sanity check for the fix above: a pending_external publication still
+    # within the timeout window behaves exactly as before -- it stays
+    # pending and keeps its external state for the next poll.
+    item, pub = seed(db, channel="instagram", scheduled=NOW - timedelta(minutes=10))
+    pub.status = "pending_external"
+    pub.external_state = {"creation_id": "c9"}
+    db.commit()
+    adapter = StubAdapter([PublishOutcome(status="pending", state={"creation_id": "c9"})])
+    report = run_tick(db, {"instagram": adapter}, NOW, notify=lambda m: None)
+    assert report["pending"] == 1
+    assert report["failed"] == 0
+    assert pub.status == "pending_external"
+    assert pub.external_state == {"creation_id": "c9"}
+
+
 def test_auth_error_pauses_channel(db):
     item, pub = seed(db, channel="x")
     notes = []

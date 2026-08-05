@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 from sqlalchemy import or_, select
@@ -12,6 +12,16 @@ from app.state import transition
 from app.utm import with_utm
 
 MAX_ATTEMPTS = 3
+PENDING_MAX_AGE = timedelta(hours=1)
+
+
+def _aware(dt: datetime) -> datetime:
+    # SQLite (used in tests) doesn't round-trip tzinfo on DateTime(timezone=True)
+    # columns the way Postgres does in production, so a value freshly loaded
+    # from the DB can come back naive even though it was written as UTC.
+    # `now` (from datetime.now(timezone.utc)) is always aware, so normalize
+    # here rather than let the subtraction raise.
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
 
 
 def _build_request(pub: Publication) -> PublishRequest:
@@ -118,6 +128,25 @@ def run_tick(
             pub.posted_at = now
             pub.post_ref = outcome.post_ref
             report["posted"] += 1
+        elif (
+            pub.status == "pending_external"
+            and now - _aware(pub.scheduled_at) > PENDING_MAX_AGE
+        ):
+            # A pending_external publication that has been polling for too
+            # long (e.g. an IG Reels container stuck IN_PROGRESS) must not
+            # be re-pended forever -- fail it explicitly rather than leaving
+            # the item in "scheduled" indefinitely. The pub.status == "pending_external"
+            # guard matters: this branch also runs for a publication's *first*
+            # pending outcome (e.g. an IG container just created, or a first
+            # attempt on a publication whose scheduled_at is already old
+            # because of a missed cron window or an earlier auth pause) --
+            # those must still get their first poll rather than being failed
+            # before ever checking status once.
+            error_text = "pending timeout after 1h"
+            pub.status = "failed"
+            pub.last_error = error_text
+            report["failed"] += 1
+            notify(f"[AutoMarketing] publish failed on {pub.channel}: {error_text}")
         else:
             pub.status = "pending_external"
             pub.external_state = outcome.state
