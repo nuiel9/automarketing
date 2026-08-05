@@ -75,3 +75,19 @@ def test_reject_and_reopen(client_with_db):
         f"/api/items/{item['id']}/reject", json={"reason": "cringe"}, headers=AUTH
     )
     assert r.json()["status"] == "rejected"
+
+
+def test_approve_normalizes_naive_scheduled_at_to_utc(client_with_db):
+    item = _create(client_with_db).json()
+    naive = "2026-08-06T12:00:00"  # no tzinfo
+    resp = client_with_db.post(
+        f"/api/items/{item['id']}/approve",
+        json={"scheduled_at": naive, "channels": ["facebook"]},
+        headers=AUTH,
+    )
+    assert resp.status_code == 200
+    scheduled_at = resp.json()["publications"][0]["scheduled_at"]
+    assert scheduled_at.endswith("+00:00")
+    assert datetime.fromisoformat(scheduled_at) == datetime(
+        2026, 8, 6, 12, 0, 0, tzinfo=timezone.utc
+    )

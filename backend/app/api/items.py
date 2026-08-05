@@ -1,7 +1,7 @@
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -78,6 +78,9 @@ def _generate(item: ContentItem, session: Session) -> str | None:
                 title=c.title,
                 body=c.body,
                 hashtags=c.hashtags,
+                # Explicit: mirrors the ORM column default, but that default only
+                # applies at flush/INSERT time -- item_json() may read this field
+                # on a still-transient instance beforehand. Do not remove.
                 edited_by_human=False,
             )
         )
@@ -99,6 +102,9 @@ def create_item(
         topic=topic,
         hook=hook,
         link=link,
+        # Explicit: ContentItem.status has an ORM default="idea", but that only
+        # applies at flush/INSERT time -- _generate() below branches on
+        # item.status before this instance is ever flushed. Do not remove.
         status="idea",
     )
     if file is not None:
@@ -163,6 +169,16 @@ class ApproveBody(BaseModel):
     scheduled_at: datetime
     channels: list[str]
 
+    @field_validator("scheduled_at")
+    @classmethod
+    def _normalize_scheduled_at(cls, value: datetime) -> datetime:
+        # The publisher (Task 9) compares this against datetime.now(timezone.utc);
+        # a naive value would raise TypeError there and be ambiguous in storage.
+        # Assume UTC for naive input, otherwise convert aware input to UTC.
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
 
 @router.post("/items/{item_id}/approve")
 def approve(item_id: str, body: ApproveBody, session: Session = Depends(get_session)):
@@ -188,6 +204,10 @@ def approve(item_id: str, body: ApproveBody, session: Session = Depends(get_sess
             Publication(
                 channel=channel,
                 scheduled_at=body.scheduled_at,
+                # Explicit: mirrors Publication's ORM defaults (status="pending",
+                # attempts=0), but those only apply at flush/INSERT time and this
+                # request's response is built from the still-transient instance.
+                # Do not remove.
                 status="pending",
                 attempts=0,
             )
