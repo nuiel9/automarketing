@@ -1,0 +1,61 @@
+# Builds and pushes the backend + frontend images to Artifact Registry.
+# Modeled on eduverse-one's cloudbuild.yaml (same org, same registry
+# pattern). Deliberately does NOT deploy — `gcloud run deploy` is a separate,
+# explicit step in docs/DEPLOY.md so a human always sees (and can override)
+# the env vars a new revision gets. Run from the REPO ROOT:
+#
+#   gcloud builds submit --config=cloudbuild.yaml \
+#     --substitutions=_BACKEND_URL=https://<backend-run-url> \
+#     --region=asia-southeast1 .
+#
+# _BACKEND_URL must be the deployed backend's Cloud Run URL (or a placeholder
+# for a first-ever build, corrected by rebuilding the frontend once the
+# backend URL is known) — it's baked into the frontend bundle at build time,
+# not read at runtime. See docs/DEPLOY.md.
+
+substitutions:
+  _REGION: asia-southeast1
+  _REPO: automarketing
+  _BACKEND_URL: ""
+
+steps:
+  # Backend: repo-root context required so `COPY strategy.yaml` in
+  # backend/Dockerfile can see the file (it lives above backend/).
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - backend/Dockerfile
+      - -t
+      - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/backend:$BUILD_ID"
+      - -t
+      - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/backend:latest"
+      - .
+  - name: gcr.io/cloud-builders/docker
+    args: ["push", "--all-tags", "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/backend"]
+
+  # Frontend: its own directory as context; NEXT_PUBLIC_API_URL must be a
+  # build ARG (Next.js inlines NEXT_PUBLIC_* at build time).
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - frontend/Dockerfile
+      - --build-arg
+      - "NEXT_PUBLIC_API_URL=${_BACKEND_URL}"
+      - -t
+      - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/frontend:$BUILD_ID"
+      - -t
+      - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/frontend:latest"
+      - frontend
+  - name: gcr.io/cloud-builders/docker
+    args: ["push", "--all-tags", "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/frontend"]
+
+images:
+  - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/backend:$BUILD_ID"
+  - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/backend:latest"
+  - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/frontend:$BUILD_ID"
+  - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/frontend:latest"
+
+options:
+  logging: CLOUD_LOGGING_ONLY

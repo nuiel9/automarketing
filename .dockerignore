@@ -1,0 +1,19 @@
+# Keeps `docker build -f backend/Dockerfile .` (repo-root context, needed so
+# COPY strategy.yaml works — see backend/Dockerfile) from shipping local
+# junk to the daemon. Every COPY in backend/Dockerfile and frontend/Dockerfile
+# names its paths explicitly, so nothing here is ever copied into an image;
+# this file only keeps the build-context upload small and secret-free.
+.git/
+**/__pycache__/
+**/*.pyc
+backend/.venv/
+backend/.pytest_cache/
+backend/automarketing.egg-info/
+backend/media/
+media/
+frontend/node_modules/
+frontend/.next/
+.env
+**/.env
+docs/
+.superpowers/

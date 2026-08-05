@@ -1,0 +1,8 @@
+# Context for `docker build -f frontend/Dockerfile frontend`. Excluding
+# node_modules matters beyond speed: this repo's local node_modules holds
+# macOS-native binaries (e.g. lightningcss); if `COPY . .` picked those up
+# before `npm ci` reinstalls Linux-native ones, the container build breaks.
+node_modules/
+.next/
+.git/
+npm-debug.log*
