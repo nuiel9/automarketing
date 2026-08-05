@@ -57,25 +57,32 @@ export default function ItemCard({ item, onChanged }: { item: Item; onChanged: (
       {item.banned_violations.length > 0 && (
         <p className="text-sm text-red-600">คำต้องห้าม: {item.banned_violations.join(", ")}</p>
       )}
-      {captions.map((c) => (
-        <div key={c.channel} className="space-y-1">
-          <label className="text-xs font-semibold uppercase">{c.channel}</label>
-          <textarea
-            className="w-full rounded border p-2 text-sm"
-            rows={3}
-            value={c.body}
-            onChange={(e) =>
-              setCaptions(captions.map((x) => (x.channel === c.channel ? { ...x, body: e.target.value } : x)))
-            }
-            onBlur={() => {
-              const current = captions.find((x) => x.channel === c.channel)!;
-              if (current.body !== originalBodies.current[c.channel]) {
-                saveCaption(current);
+      {captions.map((c) =>
+        item.status === "in_review" || item.status === "idea" ? (
+          <div key={c.channel} className="space-y-1">
+            <label className="text-xs font-semibold uppercase">{c.channel}</label>
+            <textarea
+              className="w-full rounded border p-2 text-sm"
+              rows={3}
+              value={c.body}
+              onChange={(e) =>
+                setCaptions(captions.map((x) => (x.channel === c.channel ? { ...x, body: e.target.value } : x)))
               }
-            }}
-          />
-        </div>
-      ))}
+              onBlur={() => {
+                const current = captions.find((x) => x.channel === c.channel)!;
+                if (current.body !== originalBodies.current[c.channel]) {
+                  saveCaption(current);
+                }
+              }}
+            />
+          </div>
+        ) : (
+          <div key={c.channel} className="space-y-1">
+            <label className="text-xs font-semibold uppercase">{c.channel}</label>
+            <p className="w-full whitespace-pre-wrap rounded border bg-gray-50 p-2 text-sm">{c.body}</p>
+          </div>
+        )
+      )}
       {item.status === "in_review" && (
         <div className="space-y-2">
           <div className="flex flex-wrap gap-2">

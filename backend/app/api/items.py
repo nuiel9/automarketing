@@ -128,6 +128,8 @@ def _get(item_id: str, session: Session) -> ContentItem:
 @router.post("/items/{item_id}/captions")
 def regenerate(item_id: str, session: Session = Depends(get_session)):
     item = _get(item_id, session)
+    if item.status not in ("idea", "in_review"):
+        raise HTTPException(409, "captions are locked once approved")
     error = _generate(item, session)
     if error:
         raise HTTPException(502, f"caption generation failed: {error}")
@@ -157,6 +159,8 @@ class CaptionEdit(BaseModel):
 @router.put("/items/{item_id}/captions")
 def edit_caption(item_id: str, edit: CaptionEdit, session: Session = Depends(get_session)):
     item = _get(item_id, session)
+    if item.status not in ("idea", "in_review"):
+        raise HTTPException(409, "captions are locked once approved")
     for c in item.captions:
         if c.channel == edit.channel:
             c.title, c.body, c.hashtags = edit.title, edit.body, edit.hashtags
@@ -245,5 +249,11 @@ def retry(item_id: str, session: Session = Depends(get_session)):
         raise HTTPException(409, str(exc))
     for p in item.publications:
         if p.status == "failed":
-            p.status, p.attempts, p.next_attempt_at, p.last_error = "pending", 0, None, None
+            p.status, p.attempts, p.next_attempt_at, p.last_error, p.external_state = (
+                "pending",
+                0,
+                None,
+                None,
+                None,
+            )
     return item_json(item)

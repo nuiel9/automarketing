@@ -113,6 +113,85 @@ def test_reject_and_reopen(client_with_db):
     assert r.json()["status"] == "rejected"
 
 
+def _approve(client, item_id, channels=("facebook",)):
+    when = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+    return client.post(
+        f"/api/items/{item_id}/approve",
+        json={"scheduled_at": when, "channels": list(channels)},
+        headers=AUTH,
+    )
+
+
+def test_edit_caption_locked_after_approval(client_with_db):
+    item = _create(client_with_db).json()
+    original_body = next(c["body"] for c in item["captions"] if c["channel"] == "facebook")
+    approve_resp = _approve(client_with_db, item["id"])
+    assert approve_resp.status_code == 200
+
+    resp = client_with_db.put(
+        f"/api/items/{item['id']}/captions",
+        json={"channel": "facebook", "title": None, "body": "แก้หลังอนุมัติ", "hashtags": []},
+        headers=AUTH,
+    )
+    assert resp.status_code == 409
+    assert "locked" in resp.text
+
+    get_resp = client_with_db.get(f"/api/items/{item['id']}", headers=AUTH)
+    body = next(c["body"] for c in get_resp.json()["captions"] if c["channel"] == "facebook")
+    assert body == original_body
+
+
+def test_regenerate_captions_locked_after_approval(client_with_db):
+    item = _create(client_with_db).json()
+    approve_resp = _approve(client_with_db, item["id"])
+    assert approve_resp.status_code == 200
+
+    resp = client_with_db.post(f"/api/items/{item['id']}/captions", headers=AUTH)
+    assert resp.status_code == 409
+    assert "locked" in resp.text
+
+
+def test_edit_caption_allowed_while_in_review(client_with_db):
+    item = _create(client_with_db).json()
+    resp = client_with_db.put(
+        f"/api/items/{item['id']}/captions",
+        json={"channel": "facebook", "title": None, "body": "แก้ระหว่างรีวิว", "hashtags": []},
+        headers=AUTH,
+    )
+    assert resp.status_code == 200
+    body = next(c["body"] for c in resp.json()["captions"] if c["channel"] == "facebook")
+    assert body == "แก้ระหว่างรีวิว"
+
+
+def test_retry_resets_failed_publications_and_clears_external_state(client_with_db, db):
+    from app.models import ContentItem
+
+    item = _create(client_with_db).json()
+    approve_resp = _approve(client_with_db, item["id"])
+    assert approve_resp.status_code == 200
+
+    db_item = db.get(ContentItem, item["id"])
+    db_item.status = "failed"
+    pub = db_item.publications[0]
+    pub.status = "failed"
+    pub.attempts = 3
+    pub.last_error = "boom"
+    pub.external_state = {"creation_id": "c9"}
+    db.commit()
+
+    resp = client_with_db.post(f"/api/items/{item['id']}/retry", headers=AUTH)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "scheduled"
+    pub_body = body["publications"][0]
+    assert pub_body["status"] == "pending"
+    assert pub_body["attempts"] == 0
+    assert pub_body["last_error"] is None
+
+    db.refresh(pub)
+    assert pub.external_state is None
+
+
 def test_approve_normalizes_naive_scheduled_at_to_utc(client_with_db):
     item = _create(client_with_db).json()
     naive = "2026-08-06T12:00:00"  # no tzinfo
