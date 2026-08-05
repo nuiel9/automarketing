@@ -185,9 +185,22 @@ Notes:
   scheduler → DB → publisher → media path end-to-end before any real
   platform token is live. Flip channels on with the `gcloud run services
   update` command at the end of step 9 once that check passes.
-- `ANTHROPIC_API_KEY` may be a placeholder/empty at this point — caption
-  generation degrading is an accepted gap for the dryrun verification (see
-  step 9).
+- `ANTHROPIC_API_KEY` **must be a real, working key before step 9** — not
+  optional. An item whose caption generation fails never leaves status
+  `idea` (`app/api/items.py`'s `_generate` only transitions `idea →
+  in_review` on success), and `approve()` requires status `in_review` to
+  transition to `approved` (`app/state.py`'s `ITEM_TRANSITIONS`) — it
+  checks that state transition before it ever reaches the dryrun-caption
+  exemption, so a caption failure 409s the approve call outright, not a
+  soft degradation.
+  If `$ANTHROPIC_API_KEY_VALUE` was a placeholder when this service was
+  deployed, update the secret with a real key
+  (`printf '%s' "$REAL_KEY" | gcloud secrets versions add ANTHROPIC_API_KEY
+  --data-file=- --project="$PROJECT"`) and redeploy — Cloud Run resolves
+  `--set-secrets` to `:latest` at container start, so a fresh revision (or
+  `gcloud run services update "$BACKEND_SVC" --region="$REGION"
+  --project="$PROJECT" --update-secrets=ANTHROPIC_API_KEY=ANTHROPIC_API_KEY:latest`)
+  is enough — no image rebuild needed.
 
 ## 7. Deploy the frontend
 
@@ -227,6 +240,17 @@ about the frontend, the DB, the scheduler, or the media path.
    redirects to `/login` → paste `$ADMIN_TOKEN_VALUE` → lands on the queue
    page with no console errors.
 3. **Create a real item, dryrun-approve it, and watch it post:**
+
+   This step **requires a working `ANTHROPIC_API_KEY`** in Secret Manager
+   (see the step-6 note) — not optional, and not something the dryrun
+   channel exempts you from. `create_item` only transitions an item out of
+   status `idea` into `in_review` when caption generation succeeds
+   (`app/api/items.py`'s `_generate`); `approve()` requires status
+   `in_review` to transition to `approved`, so an item stuck in `idea`
+   409s on approve regardless of channel — the dryrun caption exemption in
+   `approve()` only skips the *caption-existence* check, not the
+   *state-machine* check, and state comes first.
+
    ```bash
    ITEM=$(curl -s -X POST "${BACKEND_URL}/api/items" \
      -H "Authorization: Bearer ${ADMIN_TOKEN_VALUE}" \
@@ -234,11 +258,23 @@ about the frontend, the DB, the scheduler, or the media path.
      -F "link=https://eduverse.one" \
      -F "file=@/path/to/tiny.mp4")
    ITEM_ID=$(echo "$ITEM" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+   echo "$ITEM" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("caption_error"))'
+   ```
 
-   # Caption generation may fail here without a real ANTHROPIC_API_KEY —
-   # that's acceptable; the dryrun channel doesn't require captions to
-   # approve (app/api/items.py's approve() only requires captions for
-   # non-dryrun channels).
+   If that prints anything other than `None`, caption generation failed
+   (commonly: `ANTHROPIC_API_KEY` is still a placeholder — fix it per the
+   step-6 note, then retry). Once the key is real, either recreate the
+   item (command above) or regenerate captions on this one before
+   approving:
+
+   ```bash
+   curl -s -X POST "${BACKEND_URL}/api/items/${ITEM_ID}/captions" \
+     -H "Authorization: Bearer ${ADMIN_TOKEN_VALUE}"   # idea -> in_review on success
+   ```
+
+   Then approve for dryrun:
+
+   ```bash
    curl -s -X POST "${BACKEND_URL}/api/items/${ITEM_ID}/approve" \
      -H "Authorization: Bearer ${ADMIN_TOKEN_VALUE}" -H "Content-Type: application/json" \
      -d "{\"scheduled_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\", \"channels\": [\"dryrun\"]}"

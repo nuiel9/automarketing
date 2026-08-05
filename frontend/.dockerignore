@@ -6,3 +6,7 @@ node_modules/
 .next/
 .git/
 npm-debug.log*
+# Mirrors the root .dockerignore's care around .env: a future
+# frontend/.env.local (real API keys, local overrides) must never ride
+# along in `COPY . .` and end up baked into the image.
+.env*
