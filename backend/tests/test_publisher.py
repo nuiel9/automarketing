@@ -76,8 +76,50 @@ def test_auth_error_pauses_channel(db):
     item, pub = seed(db, channel="x")
     notes = []
     adapter = StubAdapter([ChannelAuthError("token expired")])
-    run_tick(db, {"x": adapter}, NOW, notify=notes.append)
+    report = run_tick(db, {"x": adapter}, NOW, notify=notes.append)
     assert pub.status == "pending" and pub.attempts == 0
     state = db.get(ChannelState, "x")
     assert state is not None and state.needs_reauth is True
     assert len(notes) == 1
+    assert report["auth_paused"] == 1
+
+
+def test_bare_exception_is_retried_like_channel_error(db):
+    # A non-ChannelError exception (httpx timeout, adapter bug, etc.) must not
+    # propagate out of run_tick: it should be treated like a retryable
+    # ChannelError so the transaction still commits and earlier successes in
+    # the same tick aren't rolled back and re-published next tick.
+    item, pub = seed(db)
+    adapter = StubAdapter([RuntimeError("dns boom")])
+    report = run_tick(db, {"dryrun": adapter}, NOW, notify=lambda m: None)
+    assert report["retried"] == 1
+    assert pub.status == "pending" and pub.attempts == 1
+    assert "dns boom" in pub.last_error
+
+
+def test_missing_adapter_increments_skipped_counter(db):
+    item, pub = seed(db, channel="tiktok")
+    report = run_tick(db, {}, NOW, notify=lambda m: None)
+    assert report["skipped"] == 1
+    assert pub.status == "pending" and pub.attempts == 0
+
+
+def test_earlier_success_survives_later_bare_exception_in_same_tick(db):
+    # This is the actual regression the fix guards against: run_tick must
+    # finish and return a report (so session.flush() runs and get_session's
+    # later commit can persist everything) even when a LATER publication in
+    # the same tick blows up with a non-ChannelError exception. If the bare
+    # exception were allowed to propagate, the whole tick's transaction
+    # would roll back and this publication -- already marked posted earlier
+    # in this same call -- would be re-published on the next tick.
+    item_a, pub_a = seed(db, channel="dryrun")
+    item_b, pub_b = seed(db, channel="line")
+    adapter_a = StubAdapter([PublishOutcome(status="posted", post_ref="p1")])
+    adapter_b = StubAdapter([RuntimeError("boom")])
+    report = run_tick(
+        db, {"dryrun": adapter_a, "line": adapter_b}, NOW, notify=lambda m: None
+    )
+    assert report["posted"] == 1
+    assert report["retried"] == 1
+    assert pub_a.status == "posted" and pub_a.post_ref == "p1"
+    assert pub_b.status == "pending" and pub_b.attempts == 1

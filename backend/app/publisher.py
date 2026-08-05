@@ -45,13 +45,35 @@ def _settle_item(item: ContentItem) -> None:
         transition(item, "failed")
 
 
+def _retry_or_fail(
+    pub: Publication,
+    report: dict,
+    notify: Callable[[str], None],
+    now: datetime,
+    error_text: str,
+) -> None:
+    pub.attempts += 1
+    pub.last_error = error_text
+    if pub.attempts >= MAX_ATTEMPTS:
+        pub.status = "failed"
+        report["failed"] += 1
+        notify(f"[AutoMarketing] publish failed on {pub.channel}: {error_text}")
+    else:
+        pub.next_attempt_at = now + timedelta(minutes=2**pub.attempts)
+        report["retried"] += 1
+    _settle_item(pub.item)
+
+
 def run_tick(
     session,
     adapters: dict[str, ChannelAdapter],
     now: datetime,
     notify: Callable[[str], None],
 ) -> dict:
-    report = {"posted": 0, "pending": 0, "failed": 0, "retried": 0}
+    report = {
+        "posted": 0, "pending": 0, "failed": 0, "retried": 0,
+        "skipped": 0, "auth_paused": 0,
+    }
     due = session.scalars(
         select(Publication)
         .where(
@@ -65,6 +87,7 @@ def run_tick(
     for pub in due:
         adapter = adapters.get(pub.channel)
         if adapter is None:
+            report["skipped"] += 1
             continue
         try:
             outcome: PublishOutcome = adapter.publish(_build_request(pub))
@@ -74,19 +97,20 @@ def run_tick(
             state.note = str(exc)
             session.merge(state)
             pub.next_attempt_at = now + timedelta(hours=1)
+            report["auth_paused"] += 1
             notify(f"[AutoMarketing] {pub.channel} needs re-auth: {exc}")
             continue
         except ChannelError as exc:
-            pub.attempts += 1
-            pub.last_error = str(exc)
-            if pub.attempts >= MAX_ATTEMPTS:
-                pub.status = "failed"
-                report["failed"] += 1
-                notify(f"[AutoMarketing] publish failed on {pub.channel}: {exc}")
-            else:
-                pub.next_attempt_at = now + timedelta(minutes=2**pub.attempts)
-                report["retried"] += 1
-            _settle_item(pub.item)
+            _retry_or_fail(pub, report, notify, now, str(exc))
+            continue
+        except Exception as exc:
+            # A bare (non-ChannelError) exception from an adapter — httpx
+            # timeout, DNS failure, adapter bug — must never propagate out of
+            # run_tick: that would abort get_session's commit and roll back
+            # publications already marked posted earlier in this same tick,
+            # causing them to be re-published on the next tick. Treat it like
+            # a retryable ChannelError instead.
+            _retry_or_fail(pub, report, notify, now, repr(exc))
             continue
 
         if outcome.status == "posted":
