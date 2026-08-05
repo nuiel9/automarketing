@@ -1,0 +1,16 @@
+name: fixture-demo
+login: false
+steps:
+  - narration: "พิมพ์เป้าหมายที่อยากเรียน"
+    action: type
+    selector: "#goal"
+    text: "ติว TGAT"
+    sound: keystroke
+  - narration: "ระบบสร้างคอร์สให้ทันที"
+    action: click
+    selector: "#go"
+    sound: click
+  - narration: "แล้วคุยกับพี่กวีได้เลย"
+    action: wait_for
+    selector: "#done"
+    fit: speedup
