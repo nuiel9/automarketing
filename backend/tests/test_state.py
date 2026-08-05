@@ -1,7 +1,7 @@
 import pytest
 
 from app.models import ContentItem
-from app.state import InvalidTransition, transition
+from app.state import ITEM_TRANSITIONS, InvalidTransition, transition
 
 
 def make(status: str) -> ContentItem:
@@ -38,3 +38,19 @@ def test_render_transitions_allowed(src, dst):
     item = make(src)
     transition(item, dst)
     assert item.status == dst
+
+
+def test_item_transitions_full_map():
+    # Guards the whole state machine, not just the two Phase 2 edges above —
+    # a silent edit to any other entry would otherwise pass review unnoticed.
+    assert ITEM_TRANSITIONS == {
+        "idea": {"in_review", "rendering"},
+        "planned": {"rendering", "rejected"},
+        "rendering": {"in_review", "failed"},
+        "in_review": {"approved", "rejected"},
+        "approved": {"scheduled"},
+        "scheduled": {"posted", "failed"},
+        "posted": set(),
+        "failed": {"scheduled", "rendering"},
+        "rejected": {"in_review"},
+    }
