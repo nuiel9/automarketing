@@ -183,6 +183,8 @@ class ApproveBody(BaseModel):
 @router.post("/items/{item_id}/approve")
 def approve(item_id: str, body: ApproveBody, session: Session = Depends(get_session)):
     item = _get(item_id, session)
+    if not body.channels:
+        raise HTTPException(422, "channels must not be empty")
     strategy = load_strategy(get_settings().strategy_path)
     violations = banned_violations(
         strategy, [c.body for c in item.captions] + [c.title or "" for c in item.captions]

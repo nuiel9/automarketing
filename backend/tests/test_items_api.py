@@ -52,6 +52,20 @@ def test_approve_creates_publications(client_with_db):
     assert all(p["status"] == "pending" for p in body["publications"])
 
 
+def test_approve_rejects_empty_channels(client_with_db):
+    item = _create(client_with_db).json()
+    when = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+    resp = client_with_db.post(
+        f"/api/items/{item['id']}/approve",
+        json={"scheduled_at": when, "channels": []},
+        headers=AUTH,
+    )
+    assert resp.status_code == 422
+    assert "channels" in resp.text
+    get_resp = client_with_db.get(f"/api/items/{item['id']}", headers=AUTH)
+    assert get_resp.json()["status"] == "in_review"
+
+
 def test_approve_blocked_by_banned_words(client_with_db):
     item = _create(client_with_db).json()
     client_with_db.put(

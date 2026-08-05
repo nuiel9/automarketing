@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { apiFetch } from "@/lib/api";
 
 type Caption = {
@@ -25,6 +25,9 @@ export default function ItemCard({ item, onChanged }: { item: Item; onChanged: (
   const [channels, setChannels] = useState<string[]>(["facebook", "instagram", "x", "line"]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const originalBodies = useRef<Record<string, string>>(
+    Object.fromEntries(item.captions.map((c) => [c.channel, c.body]))
+  );
 
   const act = async (fn: () => Promise<unknown>) => {
     setBusy(true); setError("");
@@ -33,7 +36,14 @@ export default function ItemCard({ item, onChanged }: { item: Item; onChanged: (
   };
 
   const saveCaption = (c: Caption) =>
-    act(() => apiFetch(`/api/items/${item.id}/captions`, { method: "PUT", body: JSON.stringify(c) }));
+    act(() =>
+      apiFetch(`/api/items/${item.id}/captions`, { method: "PUT", body: JSON.stringify(c) }).then(
+        (result) => {
+          originalBodies.current[c.channel] = c.body;
+          return result;
+        }
+      )
+    );
 
   return (
     <div className="space-y-3 rounded-xl border p-4 shadow-sm">
@@ -57,7 +67,12 @@ export default function ItemCard({ item, onChanged }: { item: Item; onChanged: (
             onChange={(e) =>
               setCaptions(captions.map((x) => (x.channel === c.channel ? { ...x, body: e.target.value } : x)))
             }
-            onBlur={() => saveCaption(captions.find((x) => x.channel === c.channel)!)}
+            onBlur={() => {
+              const current = captions.find((x) => x.channel === c.channel)!;
+              if (current.body !== originalBodies.current[c.channel]) {
+                saveCaption(current);
+              }
+            }}
           />
         </div>
       ))}
@@ -85,7 +100,7 @@ export default function ItemCard({ item, onChanged }: { item: Item; onChanged: (
           />
           <div className="flex gap-2">
             <button
-              disabled={busy || !when}
+              disabled={busy || !when || channels.length === 0}
               className="rounded bg-green-600 px-3 py-2 text-sm text-white disabled:opacity-40"
               onClick={() =>
                 act(() =>
