@@ -17,8 +17,8 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    @app.get("/healthz")
-    def healthz() -> dict:
+    @app.get("/health")
+    def health() -> dict:
         return {"status": "ok"}
 
     app.include_router(media_router)

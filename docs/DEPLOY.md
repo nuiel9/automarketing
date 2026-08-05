@@ -229,12 +229,12 @@ gcloud scheduler jobs create http automarketing-tick \
 
 ## 9. Post-deploy verification
 
-Do not skip — a `200` from `/healthz` proves the backend booted, nothing
+Do not skip — a `200` from `/health` proves the backend booted, nothing
 about the frontend, the DB, the scheduler, or the media path.
 
 1. **Backend health:**
    ```bash
-   curl -s -o /dev/null -w '%{http_code}\n' "${BACKEND_URL}/healthz"   # expect 200
+   curl -s -o /dev/null -w '%{http_code}\n' "${BACKEND_URL}/health"   # expect 200
    ```
 2. **Frontend loads and logs in:** open `$FRONTEND_URL` in a browser →
    redirects to `/login` → paste `$ADMIN_TOKEN_VALUE` → lands on the queue
@@ -304,3 +304,7 @@ command is:
 gcloud run services update "$BACKEND_SVC" --region="$REGION" --project="$PROJECT" \
   --update-env-vars="ENABLED_CHANNELS=facebook,instagram,x,line,dryrun"
 ```
+
+> **Why `/health`, not `/healthz`:** Google's frontend intercepts the exact
+> path `/healthz` on `*.run.app` hosts and serves its own 404 without
+> forwarding to the container. Do not name a route `/healthz` on Cloud Run.
