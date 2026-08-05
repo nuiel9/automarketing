@@ -1,3 +1,5 @@
+from functools import lru_cache
+
 import anthropic
 from pydantic import BaseModel
 
@@ -28,8 +30,11 @@ def _client() -> anthropic.Anthropic:
     return anthropic.Anthropic(api_key=get_settings().anthropic_api_key)
 
 
+@lru_cache
 def _genai_client():
     # Lazy import: environments running the anthropic provider don't need the SDK.
+    # Cached: a per-call temporary Client can be garbage-collected mid-request,
+    # closing the transport under the in-flight call ("client has been closed").
     from google import genai
     from google.genai import types
 
