@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.items import router as items_router
 from app.api.media import router as media_router
 from app.config import get_settings
 
@@ -20,6 +21,7 @@ def create_app() -> FastAPI:
         return {"status": "ok"}
 
     app.include_router(media_router)
+    app.include_router(items_router)
 
     return app
 
