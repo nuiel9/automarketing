@@ -133,36 +133,34 @@ YouTube requires API approval (audit) for the `youtube.upload` scope, which lets
 
 1. **Create a Google Cloud Project**
    - Go to https://console.cloud.google.com/
-   - Click "Select a Project" → "NEW PROJECT"
+   - Look for an option to create a new project (labels may differ as the console changes)
    - Name it "AutoMarketing"
-   - Click "Create"
    - Wait for the project to initialize
 
 2. **Enable the YouTube Data API v3**
-   - In the left menu, click "APIs & Services" → "Library"
+   - In the console, navigate to APIs & Services (look for "Library" or "APIs")
    - Search for "YouTube Data API v3"
-   - Click it, then click "Enable"
+   - Find it in the list and enable it
 
-3. **Create an OAuth 2.0 Credential (Desktop/Service Account)**
-   - Go to "APIs & Services" → "Credentials"
-   - Click "Create Credentials" → "OAuth client ID"
+3. **Create an OAuth 2.0 Credential**
+   - Go to APIs & Services → Credentials (or equivalent)
+   - Look for an option to create OAuth credentials; select OAuth client ID
    - If prompted to configure the consent screen first:
-     - Click "Configure Consent Screen"
-     - Select "External" (external users will be your audience initially)
+     - Look for "Configure Consent Screen"
+     - Select "External" (your app will be yours initially)
      - Fill in App Name ("AutoMarketing"), User Support Email, Developer Contact Info
-     - Add the `youtube.upload` scope (search for it in the Scopes step)
+     - Add or find the `youtube.upload` scope
      - Save and continue
    - Back on Credentials, create the OAuth client ID again
-   - Application type: "Web application" or "Desktop app" (Desktop is simpler for testing)
+   - Application type: "Web application" or "Desktop app"
    - Name it "AutoMarketing"
-   - Click "Create"
    - Download the JSON file (save it securely — this is sensitive)
 
 4. **Request Audit for `youtube.upload` Scope**
-   - Go to "APIs & Services" → "OAuth consent screen"
-   - Scroll down to "Scopes"
-   - You should see `youtube.upload` listed as a restricted scope
-   - Click "Request Verification" next to it
+   - Go to APIs & Services → OAuth consent screen (or similar)
+   - Look for the "Scopes" section
+   - Find `youtube.upload` listed as a restricted scope
+   - Look for a "Request Verification" option next to it
    - Fill out the audit form:
      - **App name:** AutoMarketing
      - **Scope justification:** Explain briefly: "We publish pre-approved marketing videos to YouTube on behalf of content creators. Videos are initially private to allow review before publication."
@@ -200,21 +198,20 @@ TikTok requires audit approval for the Content Posting API. Like YouTube, **file
 
 2. **Create an Application**
    - Go to your developer dashboard
-   - Click "Create Application" (or "Add Application")
+   - Look for an option to create a new application (labels may differ)
    - **Application name:** AutoMarketing
    - **Application category:** Marketing
-   - Accept terms
-   - Click "Create"
+   - Accept terms and create
 
 3. **Request Access to Content Posting API**
-   - In your app dashboard, go to "Products" or "Permissions"
-   - Look for "Content Posting API"
-   - Click "Request Access" or "Add Permission"
-   - You'll see a form asking about your use case
+   - In your app dashboard, look for "Products," "Permissions," or similar
+   - Find "Content Posting API"
+   - Look for a "Request Access" or "Add Permission" option
+   - Fill out the form asking about your use case
    - Fill it out:
      - **Use case:** Programmatic video publishing for marketing campaigns
      - **Target audience:** Your own TikTok account
-     - **Expected volume:** ~10 posts per day
+     - **Expected volume:** 3–4 posts per week (our content cadence)
    - Submit the request
 
 4. **Complete Audit Application**
@@ -237,7 +234,7 @@ TikTok requires audit approval for the Content Posting API. Like YouTube, **file
 - This is our planned interim behavior — it's safe and controllable
 
 ### Storing Your Credentials
-Store the credentials you created (app client key, client secret, and account ID) in your password manager — the corresponding env vars ship with the Phase 2 adapters.
+Record whatever credentials the app's detail page shows (typically a client key and secret) in your password manager — the corresponding env vars ship with the Phase 2 adapter.
 
 ---
 
@@ -249,12 +246,9 @@ You already have a LINE OA (Official Account) for Eduverse. We'll reuse its exis
 ### Steps
 
 1. **Get the Existing LINE OA Channel Access Token**
-   - Go to LINE Developers Console: https://developers.line.biz/
-   - Select the Eduverse provider account
-   - Navigate to the Messaging API channel
-   - Go to the "Messaging API" tab
-   - Look for "Channel Access Token" and click to issue a long-lived token
-   - Copy the token
+   - The channel access token already in use by the support bot is stored in that bot's deployment secrets
+   - Ask the engineer for its value and reuse it
+   - **Important:** Do NOT click "Issue" in the LINE Developers Console (https://developers.line.biz/) — issuing a new token invalidates the current one and would break the running support bot
    - This is your `LINE_CHANNEL_ACCESS_TOKEN`
 
 2. **Get Your Personal LINE User ID**
