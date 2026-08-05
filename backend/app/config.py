@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     gcs_bucket: str = ""                  # gcs backend
 
     strategy_path: str = "./strategy.yaml"
+    caption_provider: str = "gemini"      # "gemini" | "anthropic"
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-3.6-flash"
     anthropic_api_key: str = ""
 
     enabled_channels: str = "dryrun"      # comma-separated: facebook,instagram,x,line,dryrun

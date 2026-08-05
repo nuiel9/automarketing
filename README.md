@@ -22,7 +22,9 @@ idea/clip ──► caption writer ──► review queue ──► scheduler �
 ## Stack
 
 FastAPI + SQLAlchemy/Postgres + Alembic · Next.js (App Router) + Tailwind ·
-Anthropic API (`claude-opus-5`, structured outputs) · Cloud Run + Cloud Scheduler + GCS.
+Gemini (`gemini-3.6-flash`, structured outputs — same model family as eduverse-one;
+Anthropic `claude-opus-5` available via `CAPTION_PROVIDER=anthropic`) ·
+Cloud Run + Cloud Scheduler + GCS.
 
 ## Local development
 
@@ -52,7 +54,7 @@ credential (and which audits to file for TikTok/YouTube). With no credentials, s
 [`docs/DEPLOY.md`](docs/DEPLOY.md) is the Cloud Run runbook (region `asia-southeast1`):
 both Docker images, Cloud Build, Cloud SQL, non-public GCS media bucket, Secret Manager,
 and the 5-minute publisher tick via Cloud Scheduler. The smoke test requires a working
-`ANTHROPIC_API_KEY`.
+`GEMINI_API_KEY`.
 
 ## Documents
 

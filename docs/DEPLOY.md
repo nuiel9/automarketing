@@ -121,13 +121,13 @@ gcloud storage buckets add-iam-policy-binding "gs://${BUCKET}" \
 ```bash
 ADMIN_TOKEN_VALUE='<generate: openssl rand -hex 24>'
 TICK_TOKEN_VALUE='<generate: openssl rand -hex 24>'
-ANTHROPIC_API_KEY_VALUE='<from console.anthropic.com>'
+GEMINI_API_KEY_VALUE='<from aistudio.google.com — captions run on Gemini by default>'
 
-printf '%s' "$ADMIN_TOKEN_VALUE"      | gcloud secrets create ADMIN_TOKEN      --data-file=- --project="$PROJECT"
-printf '%s' "$TICK_TOKEN_VALUE"       | gcloud secrets create TICK_TOKEN       --data-file=- --project="$PROJECT"
-printf '%s' "$ANTHROPIC_API_KEY_VALUE" | gcloud secrets create ANTHROPIC_API_KEY --data-file=- --project="$PROJECT"
+printf '%s' "$ADMIN_TOKEN_VALUE"     | gcloud secrets create ADMIN_TOKEN    --data-file=- --project="$PROJECT"
+printf '%s' "$TICK_TOKEN_VALUE"      | gcloud secrets create TICK_TOKEN     --data-file=- --project="$PROJECT"
+printf '%s' "$GEMINI_API_KEY_VALUE"  | gcloud secrets create GEMINI_API_KEY --data-file=- --project="$PROJECT"
 
-for SECRET in ADMIN_TOKEN TICK_TOKEN ANTHROPIC_API_KEY; do
+for SECRET in ADMIN_TOKEN TICK_TOKEN GEMINI_API_KEY; do
   gcloud secrets add-iam-policy-binding "$SECRET" \
     --member="serviceAccount:${RUNTIME_SA}" \
     --role=roles/secretmanager.secretAccessor --project="$PROJECT"
@@ -167,7 +167,7 @@ gcloud run deploy "$BACKEND_SVC" \
   --allow-unauthenticated \
   --add-cloudsql-instances="${PROJECT}:${REGION}:${SQL_INSTANCE}" \
   --set-env-vars="^##^DATABASE_URL=postgresql+psycopg://${DB_USER}:${DB_PASSWORD}@/${DB_NAME}?host=/cloudsql/${PROJECT}:${REGION}:${SQL_INSTANCE}##PUBLIC_BASE_URL=${BACKEND_URL}##FRONTEND_ORIGIN=${FRONTEND_URL}##MEDIA_BACKEND=gcs##GCS_BUCKET=${BUCKET}##MEDIA_ROOT=/tmp##ENABLED_CHANNELS=dryrun" \
-  --set-secrets="ADMIN_TOKEN=ADMIN_TOKEN:latest,TICK_TOKEN=TICK_TOKEN:latest,ANTHROPIC_API_KEY=ANTHROPIC_API_KEY:latest"
+  --set-secrets="ADMIN_TOKEN=ADMIN_TOKEN:latest,TICK_TOKEN=TICK_TOKEN:latest,GEMINI_API_KEY=GEMINI_API_KEY:latest"
 ```
 
 Notes:
@@ -185,7 +185,7 @@ Notes:
   scheduler → DB → publisher → media path end-to-end before any real
   platform token is live. Flip channels on with the `gcloud run services
   update` command at the end of step 9 once that check passes.
-- `ANTHROPIC_API_KEY` **must be a real, working key before step 9** — not
+- `GEMINI_API_KEY` **must be a real, working key before step 9** — not
   optional. An item whose caption generation fails never leaves status
   `idea` (`app/api/items.py`'s `_generate` only transitions `idea →
   in_review` on success), and `approve()` requires status `in_review` to
@@ -193,13 +193,13 @@ Notes:
   checks that state transition before it ever reaches the dryrun-caption
   exemption, so a caption failure 409s the approve call outright, not a
   soft degradation.
-  If `$ANTHROPIC_API_KEY_VALUE` was a placeholder when this service was
+  If `$GEMINI_API_KEY_VALUE` was a placeholder when this service was
   deployed, update the secret with a real key
-  (`printf '%s' "$REAL_KEY" | gcloud secrets versions add ANTHROPIC_API_KEY
+  (`printf '%s' "$REAL_KEY" | gcloud secrets versions add GEMINI_API_KEY
   --data-file=- --project="$PROJECT"`) and redeploy — Cloud Run resolves
   `--set-secrets` to `:latest` at container start, so a fresh revision (or
   `gcloud run services update "$BACKEND_SVC" --region="$REGION"
-  --project="$PROJECT" --update-secrets=ANTHROPIC_API_KEY=ANTHROPIC_API_KEY:latest`)
+  --project="$PROJECT" --update-secrets=GEMINI_API_KEY=GEMINI_API_KEY:latest`)
   is enough — no image rebuild needed.
 
 ## 7. Deploy the frontend
@@ -241,7 +241,7 @@ about the frontend, the DB, the scheduler, or the media path.
    page with no console errors.
 3. **Create a real item, dryrun-approve it, and watch it post:**
 
-   This step **requires a working `ANTHROPIC_API_KEY`** in Secret Manager
+   This step **requires a working `GEMINI_API_KEY`** in Secret Manager
    (see the step-6 note) — not optional, and not something the dryrun
    channel exempts you from. `create_item` only transitions an item out of
    status `idea` into `in_review` when caption generation succeeds
@@ -262,7 +262,7 @@ about the frontend, the DB, the scheduler, or the media path.
    ```
 
    If that prints anything other than `None`, caption generation failed
-   (commonly: `ANTHROPIC_API_KEY` is still a placeholder — fix it per the
+   (commonly: `GEMINI_API_KEY` is still a placeholder — fix it per the
    step-6 note, then retry). Once the key is real, either recreate the
    item (command above) or regenerate captions on this one before
    approving:
