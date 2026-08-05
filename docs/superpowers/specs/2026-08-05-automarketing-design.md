@@ -193,7 +193,7 @@ Cross-cutting publisher rules:
 - **Token expiry / auth error**: channel paused (`needs_reauth`), LINE alert, other
   channels unaffected.
 - **LLM schema mismatch**: SDK-level retry via `messages.parse`; persistent failure
-  flags the item `needs_attention` — malformed copy is never queued.
+  moves the item to `failed` with the validation error — malformed copy is never queued.
 - **Brand safety**: banned-words list gate + mandatory human approval.
 
 ## 7. Testing
