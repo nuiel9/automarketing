@@ -4,7 +4,7 @@ import subprocess
 import pytest
 
 import app.video.compose as compose_mod
-from app.video.compose import Segment, _hook_overlay, _thai_font, compose
+from app.video.compose import Segment, _font_family, _hook_overlay, compose
 from app.video.ffmpeg import probe_duration
 from app.video.tts import Narration
 
@@ -57,8 +57,9 @@ def test_compose_produces_vertical_mp4_with_audio_and_poster(tmp_path):
 
 
 def test_hook_overlay_skipped_when_no_thai_font_available():
-    # Debian render image has NotoSansThai; a local machine without any Thai
-    # font must not crash the whole compose over a missing drawtext font file.
+    # The render image's fonts-noto-core install has NotoSansThai; a local
+    # machine without any Thai font must not crash the whole compose over a
+    # missing drawtext font file.
     assert _hook_overlay(font=None, hook="ทดสอบ") == ""
 
 
@@ -72,19 +73,53 @@ def test_hook_overlay_uses_resolved_font_path():
     assert "text='ทดสอบ'" in frag
 
 
-def test_thai_font_resolves_to_something_on_this_machine():
-    # Exercises the real fallback chain (Debian path -> macOS candidates ->
-    # fc-match) end to end; whichever branch wins, dev machines running these
-    # tests must be able to find *a* Thai-capable font.
-    font = _thai_font()
-    assert font is None or os.path.exists(font)
+def test_font_family_derives_noto_sans_thai_from_the_render_image_filename():
+    # This is the literal that used to be hardcoded a second time in the
+    # subtitle force_style -- pinning it here documents that sourcing
+    # FontName from _font_family(FONT) is a genuine no-op in production.
+    assert _font_family(compose_mod.FONT) == "Noto Sans Thai"
 
 
-def test_thai_font_falls_back_when_debian_path_missing(monkeypatch, tmp_path):
-    monkeypatch.setattr(compose_mod, "FONT", str(tmp_path / "does-not-exist.ttf"))
+def test_font_family_derives_single_word_names():
+    assert _font_family("/System/Library/Fonts/Supplemental/Thonburi.ttc") == "Thonburi"
+    assert _font_family("/System/Library/Fonts/Supplemental/Ayuthaya.ttf") == "Ayuthaya"
+
+
+def test_mac_candidates_are_absolute_font_paths():
+    # A typo like a wrong extension (the shipped bug: Ayuthaya.ttc instead
+    # of the real Ayuthaya.ttf) doesn't crash _thai_font() -- it silently
+    # falls through to the next candidate, which is exactly why the old
+    # "font is None or os.path.exists(font)" test never caught it. This
+    # checks the candidate list's own shape instead.
+    for path in compose_mod._MAC_THAI_FONT_CANDIDATES:
+        assert os.path.isabs(path)
+        assert path.endswith((".ttf", ".ttc", ".otf"))
+
+
+def test_thai_font_returns_first_existing_candidate(monkeypatch, tmp_path):
+    real_font = tmp_path / "SomeThaiFont.ttf"
+    real_font.write_bytes(b"")
+    monkeypatch.setattr(compose_mod, "FONT", str(tmp_path / "missing-render-image-font.ttf"))
+    monkeypatch.setattr(
+        compose_mod, "_MAC_THAI_FONT_CANDIDATES",
+        [str(tmp_path / "also-missing.ttf"), str(real_font)],
+    )
     compose_mod._thai_font.cache_clear()
     try:
-        font = compose_mod._thai_font()
-        assert font is None or os.path.exists(font)
+        assert compose_mod._thai_font() == str(real_font)
+    finally:
+        compose_mod._thai_font.cache_clear()
+
+
+def test_thai_font_falls_through_to_none_when_nothing_resolves(monkeypatch, tmp_path):
+    monkeypatch.setattr(compose_mod, "FONT", str(tmp_path / "missing-render-image-font.ttf"))
+    monkeypatch.setattr(
+        compose_mod, "_MAC_THAI_FONT_CANDIDATES",
+        [str(tmp_path / "a.ttf"), str(tmp_path / "b.ttc")],
+    )
+    monkeypatch.setattr(compose_mod.shutil, "which", lambda name: None)
+    compose_mod._thai_font.cache_clear()
+    try:
+        assert compose_mod._thai_font() is None
     finally:
         compose_mod._thai_font.cache_clear()

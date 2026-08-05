@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -8,15 +9,17 @@ from app.video.ffmpeg import blip_command, fit_filter, probe_duration, run, srt_
 from app.video.tts import Narration
 
 WIDTH, HEIGHT = 1080, 1920
-# The render image (Debian, Task 9) installs fonts-noto-thai at this exact
-# path. Kept as the default candidate so production needs no extra lookup;
+# The render image (render/Dockerfile, Task 11) is Ubuntu 22.04 "jammy"
+# (mcr.microsoft.com/playwright/python:v1.49.0-jammy) with `fonts-noto-core`
+# installed via apt, which drops NotoSansThai-Regular.ttf at this exact path.
+# Kept as the default candidate so production needs no extra lookup;
 # _thai_font() below falls back through macOS locations and fc-match for
 # local dev, where this path does not exist.
 FONT = "/usr/share/fonts/truetype/noto/NotoSansThai-Regular.ttf"
 HOOK_SECONDS = 3
 
 _MAC_THAI_FONT_CANDIDATES = [
-    "/System/Library/Fonts/Supplemental/Ayuthaya.ttc",
+    "/System/Library/Fonts/Supplemental/Ayuthaya.ttf",
     "/System/Library/Fonts/Supplemental/Thonburi.ttc",
     "/System/Library/Fonts/Supplemental/Tahoma.ttf",
 ]
@@ -27,9 +30,11 @@ def _thai_font() -> str | None:
     """Resolve a Thai-capable font file, or None if none is available.
 
     The composer must never fail a whole render just because the local
-    machine lacks the Debian render image's font package — the caller
-    (compose()) skips the hook drawtext overlay entirely when this
-    returns None rather than propagating an FFmpegError.
+    machine lacks the render image's font package (fonts-noto-core, Task
+    11) -- the caller (compose()) skips the hook drawtext overlay, and
+    derives the burned subtitle style's FontName from FONT itself instead
+    (see compose()), when this returns None rather than propagating an
+    FFmpegError.
     """
     if os.path.exists(FONT):
         return FONT
@@ -50,12 +55,29 @@ def _thai_font() -> str | None:
     return None
 
 
+def _font_family(path: str) -> str:
+    """Family name implied by a font's filename, e.g.
+    'NotoSansThai-Regular.ttf' -> 'Noto Sans Thai'.
+
+    Sources the burned subtitle FontName from the exact font _thai_font()
+    resolved, instead of a second hardcoded 'Noto Sans Thai' literal that
+    only matched by coincidence in production (where _thai_font() always
+    resolves FONT) and picked the wrong family -- rendering broken glyphs --
+    whenever _thai_font() fell back to a non-Noto font on a dev machine.
+    """
+    stem = os.path.splitext(os.path.basename(path))[0]
+    stem = re.sub(r"-(Regular|Bold|Italic|Medium|SemiBold|Light)$", "", stem)
+    words = re.findall(r"[A-Z][a-z0-9]*|[a-z0-9]+", stem)
+    return " ".join(words) if words else stem
+
+
 def _hook_overlay(font: str | None, hook: str) -> str:
     """Build the drawtext filter fragment for the hook overlay, or "".
 
-    No Thai font found (e.g. local macOS dev without fonts-noto-thai) means
-    "" — the render proceeds without a hook overlay rather than failing the
-    whole compose over a missing font file.
+    No Thai font found (e.g. local macOS dev without fonts-noto-core, the
+    package the render image installs) means "" — the render proceeds
+    without a hook overlay rather than failing the whole compose over a
+    missing font file.
     """
     if not hook or not font:
         return ""
@@ -143,12 +165,26 @@ def compose(segments: list[Segment], hook: str, work_dir: str) -> tuple[str, str
     with open(srt, "w", encoding="utf-8") as f:
         f.write(srt_from_segments([(s.narration.text, s.narration.seconds) for s in segments]))
 
+    font = _thai_font()
+    # No Thai font resolved anywhere (not even a macOS fallback or fc-match)
+    # is unreachable in production -- FONT always exists there -- so this
+    # falls back to _font_family(FONT) rather than a second literal, keeping
+    # exactly one hardcoded font name in this module.
+    family = _font_family(font) if font else _font_family(FONT)
     subtitle_style = (
-        "FontName=Noto Sans Thai,FontSize=16,PrimaryColour=&H00FFFFFF,"
+        f"FontName={family},FontSize=16,PrimaryColour=&H00FFFFFF,"
         "BorderStyle=3,Outline=1,MarginV=120"
     )
-    vf = f"subtitles='{srt}':force_style='{subtitle_style}'"
-    vf += _hook_overlay(_thai_font(), hook)
+    vf = f"subtitles='{srt}'"
+    if font:
+        # Point libass at the directory the resolved font actually lives in,
+        # so it can find `family` above even when that family isn't
+        # registered with the system's fontconfig (true of every macOS
+        # fallback candidate; harmless/no-op on the render image, where
+        # fontconfig already knows "Noto Sans Thai").
+        vf += f":fontsdir='{os.path.dirname(font)}'"
+    vf += f":force_style='{subtitle_style}'"
+    vf += _hook_overlay(font, hook)
 
     mp4 = os.path.join(work_dir, "final.mp4")
     cmd = ["ffmpeg", "-y", "-i", video, "-i", voice]
