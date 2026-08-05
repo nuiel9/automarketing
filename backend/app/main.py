@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.media import router as media_router
 from app.config import get_settings
 
 
@@ -17,6 +18,8 @@ def create_app() -> FastAPI:
     @app.get("/healthz")
     def healthz() -> dict:
         return {"status": "ok"}
+
+    app.include_router(media_router)
 
     return app
 
