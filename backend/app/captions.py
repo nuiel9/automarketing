@@ -51,7 +51,7 @@ def write_captions(topic: str, hook: str | None, strategy: Strategy) -> CaptionS
     try:
         response = _client().messages.parse(
             model="claude-opus-5",
-            max_tokens=4000,
+            max_tokens=16000,
             system=system,
             messages=[{"role": "user", "content": user}],
             output_format=CaptionSet,

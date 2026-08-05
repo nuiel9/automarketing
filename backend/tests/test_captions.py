@@ -43,6 +43,7 @@ def test_write_captions_returns_set(monkeypatch):
     result = write_captions("TGAT คณิต", "hook", STRATEGY)
     assert result.tiktok.hashtags == ["#DEK69"]
     assert fake.messages.kwargs["model"] == "claude-opus-5"
+    assert fake.messages.kwargs["output_format"] is CaptionSet
     assert "TGAT คณิต" in fake.messages.kwargs["messages"][0]["content"]
 
 
