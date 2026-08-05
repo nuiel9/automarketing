@@ -15,13 +15,19 @@ class MetaAdapter:
     def _check(self, resp: httpx.Response) -> dict:
         if resp.status_code >= 500:
             raise ChannelError(f"meta {resp.status_code}")
-        data = resp.json()
         if resp.status_code >= 400:
+            try:
+                data = resp.json()
+            except ValueError:
+                # A proxy/WAF in front of the Graph API can return a non-JSON
+                # (e.g. HTML) error body. Fall back to a generic ChannelError
+                # instead of letting a raw JSONDecodeError escape the adapter.
+                raise ChannelError(f"meta {resp.status_code}")
             err = data.get("error", {})
             if err.get("code") == 190:  # invalid/expired token
                 raise ChannelAuthError(err.get("message", "token invalid"))
             raise ChannelError(err.get("message", f"meta {resp.status_code}"))
-        return data
+        return resp.json()
 
     def publish(self, req: PublishRequest) -> PublishOutcome:
         if req.channel == "facebook":

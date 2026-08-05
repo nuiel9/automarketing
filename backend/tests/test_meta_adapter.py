@@ -93,3 +93,17 @@ def test_other_4xx_raises_channel_error_not_auth_error():
         MetaAdapter(SETTINGS).publish(req("facebook"))
     assert not isinstance(exc_info.value, ChannelAuthError)
     assert "bad file_url" in str(exc_info.value)
+
+
+@respx.mock
+def test_4xx_non_json_body_raises_channel_error_not_json_decode_error():
+    # A proxy/WAF sitting in front of the Graph API can return a 4xx with an
+    # HTML error page instead of Meta's usual JSON error envelope. That must
+    # still map to a (retryable-by-caller) ChannelError, not leak a raw
+    # JSONDecodeError out of the adapter.
+    respx.post(f"{GRAPH}/PAGE/videos").mock(
+        return_value=Response(400, text="<html><body>Bad Gateway</body></html>")
+    )
+    with pytest.raises(ChannelError) as exc_info:
+        MetaAdapter(SETTINGS).publish(req("facebook"))
+    assert not isinstance(exc_info.value, ChannelAuthError)
