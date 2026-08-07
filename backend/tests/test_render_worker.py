@@ -27,7 +27,7 @@ def test_successful_render_stores_media_and_moves_to_review(db, tmp_path, monkey
     seg = Segment("clip.mp4", Narration("t", "n.wav", 1.0))
     monkeypatch.setattr(worker, "_render_segments", lambda *a, **k: ([seg], "hook"))
     monkeypatch.setattr(worker, "compose",
-                        lambda segs, hook, work_dir: (str(tmp_path / "f.mp4"), str(tmp_path / "p.jpg")))
+                        lambda segs, hook, work_dir, **kw: (str(tmp_path / "f.mp4"), str(tmp_path / "p.jpg")))
     for name in ("f.mp4", "p.jpg"):
         (tmp_path / name).write_bytes(b"x")
     saved = {}
@@ -41,6 +41,52 @@ def test_successful_render_stores_media_and_moves_to_review(db, tmp_path, monkey
     assert item.render_error is None
 
 
+def test_compose_called_with_subtitles_true_for_demo_format(db, tmp_path, monkeypatch):
+    # A demo screen-recording has no text of its own, so the burned
+    # narration subtitle is essential -- worker.py must ask compose() for it.
+    item = _item(db)
+    seg = Segment("clip.mp4", Narration("t", "n.wav", 1.0))
+    monkeypatch.setattr(worker, "_render_segments", lambda *a, **k: ([seg], "hook"))
+    calls = []
+
+    def _fake_compose(segs, hook, work_dir, **kw):
+        calls.append(kw)
+        (tmp_path / "f.mp4").write_bytes(b"x")
+        (tmp_path / "p.jpg").write_bytes(b"x")
+        return str(tmp_path / "f.mp4"), str(tmp_path / "p.jpg")
+
+    monkeypatch.setattr(worker, "compose", _fake_compose)
+    monkeypatch.setattr(worker, "get_store", _fake_store({}))
+
+    worker.render_item(db, item.id, notify=lambda m: None)
+
+    assert calls == [{"subtitles": True}]
+
+
+def test_compose_called_with_subtitles_false_for_tips_format(db, tmp_path, monkeypatch):
+    # Tips cards already display their headline and body as on-screen text,
+    # so burning the same narration over them would be redundant and
+    # collide with the card's own text.
+    item = ContentItem(slug="w32-tips-y", topic="หัวข้อ", status="rendering", format="tips")
+    db.add(item); db.commit()
+    seg = Segment("clip.mp4", Narration("t", "n.wav", 1.0))
+    monkeypatch.setattr(worker, "_render_segments", lambda *a, **k: ([seg], "hook"))
+    calls = []
+
+    def _fake_compose(segs, hook, work_dir, **kw):
+        calls.append(kw)
+        (tmp_path / "f.mp4").write_bytes(b"x")
+        (tmp_path / "p.jpg").write_bytes(b"x")
+        return str(tmp_path / "f.mp4"), str(tmp_path / "p.jpg")
+
+    monkeypatch.setattr(worker, "compose", _fake_compose)
+    monkeypatch.setattr(worker, "get_store", _fake_store({}))
+
+    worker.render_item(db, item.id, notify=lambda m: None)
+
+    assert calls == [{"subtitles": False}]
+
+
 def test_poster_upload_failure_leaves_media_path_none_and_marks_failed(db, tmp_path, monkeypatch):
     # Fix 1 (post-review): item.media_path must only be assigned once BOTH
     # the video and the poster upload have succeeded. Assigning it right
@@ -52,7 +98,7 @@ def test_poster_upload_failure_leaves_media_path_none_and_marks_failed(db, tmp_p
     seg = Segment("clip.mp4", Narration("t", "n.wav", 1.0))
     monkeypatch.setattr(worker, "_render_segments", lambda *a, **k: ([seg], "hook"))
     monkeypatch.setattr(worker, "compose",
-                        lambda segs, hook, work_dir: (str(tmp_path / "f.mp4"), str(tmp_path / "p.jpg")))
+                        lambda segs, hook, work_dir, **kw: (str(tmp_path / "f.mp4"), str(tmp_path / "p.jpg")))
     for name in ("f.mp4", "p.jpg"):
         (tmp_path / name).write_bytes(b"x")
 
@@ -85,7 +131,7 @@ def test_success_commit_failure_is_logged_and_reraised(db, tmp_path, monkeypatch
     seg = Segment("clip.mp4", Narration("t", "n.wav", 1.0))
     monkeypatch.setattr(worker, "_render_segments", lambda *a, **k: ([seg], "hook"))
     monkeypatch.setattr(worker, "compose",
-                        lambda segs, hook, work_dir: (str(tmp_path / "f.mp4"), str(tmp_path / "p.jpg")))
+                        lambda segs, hook, work_dir, **kw: (str(tmp_path / "f.mp4"), str(tmp_path / "p.jpg")))
     for name in ("f.mp4", "p.jpg"):
         (tmp_path / name).write_bytes(b"x")
     monkeypatch.setattr(worker, "get_store", _fake_store({}))

@@ -71,6 +71,82 @@ def _font_family(path: str) -> str:
     return " ".join(words) if words else stem
 
 
+# Zero-advance Thai combining vowel/tone marks (general category Mn):
+# MAI HAN-AKAT, SARA I..SARA UU, PHINTHU, MAITAIKHU, MAI EK..YAMAKKAN. These
+# attach visually to the preceding base consonant and must never be counted
+# toward a line's width budget or separated from that base by a line break.
+_THAI_COMBINING = frozenset(
+    "ัิีึืฺุู"
+    "็่้๊๋์ํ๎"
+)
+
+# Conservative advance-bearing-cluster budget per burned-subtitle line. The
+# available box width is WIDTH minus the style's MarginL+MarginR (960px at
+# 1080 - 60 - 60); at FontSize=60 with a Thai sans font, base clusters run
+# roughly 33-37px wide, so ~26-29 fit -- 24 leaves headroom. Calibrated by
+# rendering against Thonburi (the macOS dev fallback font); Noto Sans Thai,
+# the render image's actual font (see FONT), isn't installed on this dev
+# machine to measure against directly, so this errs conservative rather
+# than exact.
+_WRAP_CHARS_PER_LINE = 24
+
+
+def _thai_clusters(text: str) -> list[str]:
+    """Split text into user-visible clusters -- a base character plus any
+    trailing zero-width Thai combining marks -- so wrapping always breaks
+    between clusters, never inside one.
+    """
+    clusters: list[str] = []
+    for ch in text:
+        if clusters and ch in _THAI_COMBINING:
+            clusters[-1] += ch
+        else:
+            clusters.append(ch)
+    return clusters
+
+
+def _wrap_subtitle_text(text: str, max_chars: int = _WRAP_CHARS_PER_LINE) -> str:
+    """Hard-wrap `text` into "\\n"-joined lines sized to fit the burned
+    subtitle's frame width.
+
+    libass performs NO automatic word-wrap of unspaced Thai text: wrapping
+    there was empirically 1 line per (space-count + 1) regardless of
+    WrapStyle/MarginL/MarginR (WrapStyle=0 and WrapStyle=1 rendered
+    byte-identical output; WrapStyle=2 differed only by disabling the one
+    space-triggered break). Thai is conventionally written with no spaces
+    between words, so a normal, single-sentence narration line -- zero
+    spaces -- burned as one unbroken line that ran off both edges of the
+    frame no matter how force_style's script-resolution/margins were tuned.
+    The only thing that reliably stacked multiple lines within the frame was
+    an actual line break in the SRT cue (ffmpeg's SRT->ASS conversion maps
+    each source line to a hard "\\N", which libass always honors). So this
+    wraps the text itself, upstream of libass, using a plain greedy
+    word-wrap over Thai grapheme clusters (see _thai_clusters): break at the
+    last space within budget if there is one, else hard-break at the
+    cluster boundary.
+    """
+    if not text:
+        return text
+    lines: list[str] = []
+    line: list[str] = []
+    last_space_idx: int | None = None
+    for cluster in _thai_clusters(text):
+        line.append(cluster)
+        if cluster == " ":
+            last_space_idx = len(line) - 1
+        if len(line) >= max_chars:
+            if last_space_idx is not None:
+                lines.append("".join(line[:last_space_idx]).strip())
+                line = line[last_space_idx + 1:]
+            else:
+                lines.append("".join(line))
+                line = []
+            last_space_idx = None
+    if line:
+        lines.append("".join(line).strip())
+    return "\n".join(l for l in lines if l)
+
+
 def _hook_overlay(font: str | None, hook: str) -> str:
     """Build the drawtext filter fragment for the hook overlay, or "".
 
@@ -143,7 +219,9 @@ def _sound_track(segments: list[Segment], work_dir: str, total: float) -> str | 
     return out
 
 
-def compose(segments: list[Segment], hook: str, work_dir: str) -> tuple[str, str]:
+def compose(
+    segments: list[Segment], hook: str, work_dir: str, subtitles: bool = True
+) -> tuple[str, str]:
     os.makedirs(work_dir, exist_ok=True)
 
     fitted = []
@@ -161,30 +239,66 @@ def compose(segments: list[Segment], hook: str, work_dir: str) -> tuple[str, str
     total = sum(s.narration.seconds for s in segments)
     blips = _sound_track(segments, work_dir, total)
 
-    srt = os.path.join(work_dir, "subs.srt")
-    with open(srt, "w", encoding="utf-8") as f:
-        f.write(srt_from_segments([(s.narration.text, s.narration.seconds) for s in segments]))
-
+    # The hook overlay is independent of the `subtitles` flag (see worker.py:
+    # a tips card's on-screen hook headline is drawn by this same drawtext,
+    # not by the burned-subtitle track), so the font is always resolved.
     font = _thai_font()
-    # No Thai font resolved anywhere (not even a macOS fallback or fc-match)
-    # is unreachable in production -- FONT always exists there -- so this
-    # falls back to _font_family(FONT) rather than a second literal, keeping
-    # exactly one hardcoded font name in this module.
-    family = _font_family(font) if font else _font_family(FONT)
-    subtitle_style = (
-        f"FontName={family},FontSize=16,PrimaryColour=&H00FFFFFF,"
-        "BorderStyle=3,Outline=1,MarginV=120"
-    )
-    vf = f"subtitles='{srt}'"
-    if font:
-        # Point libass at the directory the resolved font actually lives in,
-        # so it can find `family` above even when that family isn't
-        # registered with the system's fontconfig (true of every macOS
-        # fallback candidate; harmless/no-op on the render image, where
-        # fontconfig already knows "Noto Sans Thai").
-        vf += f":fontsdir='{os.path.dirname(font)}'"
-    vf += f":force_style='{subtitle_style}'"
-    vf += _hook_overlay(font, hook)
+
+    vf_parts: list[str] = []
+    if subtitles:
+        srt = os.path.join(work_dir, "subs.srt")
+        with open(srt, "w", encoding="utf-8") as f:
+            f.write(
+                srt_from_segments([
+                    (_wrap_subtitle_text(s.narration.text), s.narration.seconds)
+                    for s in segments
+                ])
+            )
+        # No Thai font resolved anywhere (not even a macOS fallback or fc-match)
+        # is unreachable in production -- FONT always exists there -- so this
+        # falls back to _font_family(FONT) rather than a second literal, keeping
+        # exactly one hardcoded font name in this module.
+        family = _font_family(font) if font else _font_family(FONT)
+        # libass interprets FontSize/Margin* against the subtitle SCRIPT's own
+        # PlayResX/PlayResY, not the actual video frame size. ffmpeg's SRT ->
+        # ASS conversion defaults that script resolution to the classic SSA
+        # 384x288, so a style tuned by eyeballing raw numbers (FontSize=16,
+        # MarginV=120) rendered wildly wrong once libass scaled it up to the
+        # real 1080x1920 frame -- the subtitle drifted into the vertical
+        # middle, oversized, and its opaque background box swallowed the
+        # card's own text. force_style can override script-info parameters as
+        # well as style parameters (documented ffmpeg `subtitles` filter
+        # behavior), so PlayResX/PlayResY are pinned here to the real frame
+        # size and every other value is chosen in that same coordinate space:
+        # a FontSize that reads on a phone, Alignment=2 (bottom-centre), a
+        # MarginV clear of the bottom edge, and MarginL/MarginR insets.
+        # WrapStyle=0 is set for correctness (it governs how any pre-existing
+        # line breaks combine with further auto-wrap) but does NOT by itself
+        # make long lines wrap -- libass has no Thai word segmentation, so it
+        # auto-wraps only at existing spaces, and an unspaced Thai sentence
+        # (the normal case) has none. The actual wrap happens upstream, in
+        # _wrap_subtitle_text() below, which hard-breaks the text into
+        # multiple SRT lines before it ever reaches libass.
+        subtitle_style = (
+            f"FontName={family},FontSize=60,PrimaryColour=&H00FFFFFF,"
+            f"BorderStyle=3,Outline=1,PlayResX={WIDTH},PlayResY={HEIGHT},"
+            "Alignment=2,MarginV=180,MarginL=60,MarginR=60,WrapStyle=0"
+        )
+        sub_filter = f"subtitles='{srt}'"
+        if font:
+            # Point libass at the directory the resolved font actually lives in,
+            # so it can find `family` above even when that family isn't
+            # registered with the system's fontconfig (true of every macOS
+            # fallback candidate; harmless/no-op on the render image, where
+            # fontconfig already knows "Noto Sans Thai").
+            sub_filter += f":fontsdir='{os.path.dirname(font)}'"
+        sub_filter += f":force_style='{subtitle_style}'"
+        vf_parts.append(sub_filter)
+
+    hook_frag = _hook_overlay(font, hook)
+    if hook_frag:
+        vf_parts.append(hook_frag.lstrip(","))
+    vf = ",".join(vf_parts)
 
     mp4 = os.path.join(work_dir, "final.mp4")
     cmd = ["ffmpeg", "-y", "-i", video, "-i", voice]
@@ -193,7 +307,9 @@ def compose(segments: list[Segment], hook: str, work_dir: str) -> tuple[str, str
                 "[1:a][2:a]amix=inputs=2:normalize=0,loudnorm[a]", "-map", "0:v", "-map", "[a]"]
     else:
         cmd += ["-af", "loudnorm", "-map", "0:v", "-map", "1:a"]
-    cmd += ["-vf", vf, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+    if vf:
+        cmd += ["-vf", vf]
+    cmd += ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
             "-shortest", mp4]
     run(cmd)
 

@@ -71,7 +71,12 @@ def render_item(session, item_id: str, notify=line_notify) -> None:
     with tempfile.TemporaryDirectory(prefix="render-") as work_dir:
         try:
             segments, hook = _render_segments(item, work_dir)
-            mp4, poster = compose(segments, hook, work_dir)
+            # Tips cards already display their headline and body as on-screen
+            # text, so burning the same narration over them as subtitles is
+            # redundant and collides with that text (two layers of Thai
+            # fighting each other). A demo screen-recording has no text of
+            # its own, so burned subtitles are essential there.
+            mp4, poster = compose(segments, hook, work_dir, subtitles=item.format == "demo")
             store = get_store(get_settings())
             with open(mp4, "rb") as f:
                 video_ref = store.save(f, "video.mp4")
