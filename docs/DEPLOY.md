@@ -442,13 +442,24 @@ that execution shows alembic's `Running upgrade 0001 -> 0002`.
 
 2. **Demo render (expected to fail cleanly, no demo account yet):**
 
+   Use a **second, separate item** for this — reusing the tips item above
+   would leave a `status: "failed"` item that still has a playable
+   `media_url` from its earlier successful tips render (transitioning
+   `in_review -> rendering -> failed` never clears `media_path`), which
+   muddies the evidence that this specific render attempt failed.
+
    ```bash
-   curl -s -X POST "${BACKEND_URL}/api/items/${ITEM_ID}/render" \
+   ITEM2=$(curl -s -X POST "${BACKEND_URL}/api/items" \
+     -H "Authorization: Bearer ${ADMIN_TOKEN_VALUE}" \
+     -F "topic=render smoke test demo")
+   ITEM2_ID=$(echo "$ITEM2" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+
+   curl -s -X POST "${BACKEND_URL}/api/items/${ITEM2_ID}/render" \
      -H "Authorization: Bearer ${ADMIN_TOKEN_VALUE}" -H "Content-Type: application/json" \
      -d '{"format": "demo", "scenario": "fixture-demo"}'
    ```
 
-   Poll the same way. Expect the item to land in `status: "failed"` with a
+   Poll the same way (against `$ITEM2_ID`). Expect the item to land in `status: "failed"` with a
    non-null, human-readable `render_error` (not a hang, not a 500 with no
    trace) within a couple of minutes, and a LINE alert to
    `LINE_FOUNDER_USER_ID` (`app/notify.py`'s `line_notify`, called from
