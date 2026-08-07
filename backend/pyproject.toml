@@ -15,6 +15,7 @@ dependencies = [
   "google-genai>=1.0",
   "pyyaml>=6.0",
   "google-cloud-storage>=2.18",
+  "google-cloud-run>=0.10",
   "python-multipart>=0.0.9",
   "playwright>=1.62,<2",
 ]

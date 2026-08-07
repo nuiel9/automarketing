@@ -1,3 +1,4 @@
+import os
 from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -14,6 +15,8 @@ from app.models import Caption, ContentItem, Publication
 from app.state import InvalidTransition, transition
 from app.strategy import banned_violations, load_strategy
 from app.utm import campaign_slug
+from app.video.dispatcher import get_dispatcher
+from app.video.scenario import ScenarioError, load_scenario
 
 router = APIRouter(prefix="/api", dependencies=[Depends(require_admin)])
 
@@ -34,6 +37,8 @@ def item_json(item: ContentItem) -> dict:
         "media_url": f"{settings.public_base_url}/media/{item.media_token}"
         if item.media_path
         else None,
+        "scenario": item.scenario,
+        "render_error": item.render_error,
         "reject_reason": item.reject_reason,
         "banned_violations": banned_violations(
             strategy, [c.body for c in item.captions] + [c.title or "" for c in item.captions]
@@ -256,4 +261,37 @@ def retry(item_id: str, session: Session = Depends(get_session)):
                 None,
                 None,
             )
+    return item_json(item)
+
+
+RENDERABLE_FORMATS = {"demo", "tips"}
+SCENARIO_ROOT = os.environ.get("SCENARIO_ROOT", "./scenarios")
+
+
+class RenderBody(BaseModel):
+    format: str
+    scenario: str | None = None
+
+
+@router.post("/items/{item_id}/render")
+def render(item_id: str, body: RenderBody, session: Session = Depends(get_session)):
+    item = _get(item_id, session)
+    if body.format not in RENDERABLE_FORMATS:
+        raise HTTPException(422, f"format must be one of: {', '.join(sorted(RENDERABLE_FORMATS))}")
+    if body.format == "demo":
+        if not body.scenario:
+            raise HTTPException(422, "demo format requires a scenario")
+        try:
+            load_scenario(body.scenario, SCENARIO_ROOT)
+        except ScenarioError as exc:
+            raise HTTPException(422, str(exc))
+    try:
+        transition(item, "rendering")
+    except InvalidTransition as exc:
+        raise HTTPException(409, str(exc))
+    item.format = body.format
+    item.scenario = body.scenario
+    item.render_error = None
+    session.flush()
+    get_dispatcher(get_settings()).dispatch(item.id)
     return item_json(item)

@@ -13,6 +13,7 @@ from app.utm import with_utm
 
 MAX_ATTEMPTS = 3
 PENDING_MAX_AGE = timedelta(hours=1)
+RENDER_MAX_AGE = timedelta(minutes=20)
 
 
 def _aware(dt: datetime) -> datetime:
@@ -82,7 +83,7 @@ def run_tick(
 ) -> dict:
     report = {
         "posted": 0, "pending": 0, "failed": 0, "retried": 0,
-        "skipped": 0, "auth_paused": 0,
+        "skipped": 0, "auth_paused": 0, "render_failed": 0,
     }
     due = session.scalars(
         select(Publication)
@@ -153,6 +154,17 @@ def run_tick(
             pub.next_attempt_at = now + timedelta(seconds=60)
             report["pending"] += 1
         _settle_item(pub.item)
+
+    stuck = session.scalars(
+        select(ContentItem).where(ContentItem.status == "rendering")
+    ).all()
+    for item in stuck:
+        if now - _aware(item.updated_at) <= RENDER_MAX_AGE:
+            continue
+        item.render_error = "render timed out"
+        transition(item, "failed")
+        report["render_failed"] += 1
+        notify(f"[AutoMarketing] render stuck over 20 min, failed: {item.slug}")
 
     session.flush()
     return report

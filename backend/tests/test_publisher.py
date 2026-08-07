@@ -178,3 +178,30 @@ def test_earlier_success_survives_later_bare_exception_in_same_tick(db):
     assert report["retried"] == 1
     assert pub_a.status == "posted" and pub_a.post_ref == "p1"
     assert pub_b.status == "pending" and pub_b.attempts == 1
+
+
+def test_stuck_render_is_swept_to_failed(db):
+    from datetime import timedelta
+    item = ContentItem(slug="w32-demo-stuck", topic="t", status="rendering")
+    item.updated_at = NOW - timedelta(minutes=25)
+    db.add(item); db.commit()
+    notes = []
+
+    report = run_tick(db, {}, NOW, notify=notes.append)
+
+    db.refresh(item)
+    assert item.status == "failed"
+    assert report["render_failed"] == 1
+    assert notes and "stuck" in notes[0].lower()
+
+
+def test_recent_render_is_left_alone(db):
+    from datetime import timedelta
+    item = ContentItem(slug="w32-demo-fresh", topic="t", status="rendering")
+    item.updated_at = NOW - timedelta(minutes=3)
+    db.add(item); db.commit()
+
+    run_tick(db, {}, NOW, notify=lambda m: None)
+
+    db.refresh(item)
+    assert item.status == "rendering"
