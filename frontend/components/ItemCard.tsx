@@ -15,6 +15,8 @@ export type Item = {
   id: string; slug: string; topic: string; status: string;
   media_url: string | null; banned_violations: string[];
   reject_reason: string | null; captions: Caption[]; publications: Publication[];
+  scenario: string | null;
+  render_error: string | null;
 };
 
 const CHANNELS = ["tiktok", "youtube", "instagram", "facebook", "x", "line"];
@@ -25,6 +27,8 @@ export default function ItemCard({ item, onChanged }: { item: Item; onChanged: (
   const [channels, setChannels] = useState<string[]>(["facebook", "instagram", "x", "line"]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [fmt, setFmt] = useState("demo");
+  const [scenario, setScenario] = useState(item.scenario ?? "");
   const originalBodies = useRef<Record<string, string>>(
     Object.fromEntries(item.captions.map((c) => [c.channel, c.body]))
   );
@@ -82,6 +86,52 @@ export default function ItemCard({ item, onChanged }: { item: Item; onChanged: (
             <p className="w-full whitespace-pre-wrap rounded border bg-gray-50 p-2 text-sm">{c.body}</p>
           </div>
         )
+      )}
+      {!item.media_url && ["idea", "in_review", "failed"].includes(item.status) && (
+        <div className="space-y-2 rounded border border-dashed p-3">
+          <p className="text-sm font-medium">สร้างวิดีโออัตโนมัติ</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              className="rounded border p-2 text-sm"
+              value={fmt}
+              onChange={(e) => setFmt(e.target.value)}
+            >
+              <option value="demo">เดโมสินค้า</option>
+              <option value="tips">การ์ดเคล็ดลับ</option>
+            </select>
+            {fmt === "demo" && (
+              <input
+                className="rounded border p-2 text-sm"
+                placeholder="ชื่อ scenario เช่น tgat-demo"
+                value={scenario}
+                onChange={(e) => setScenario(e.target.value)}
+              />
+            )}
+            <button
+              disabled={busy || (fmt === "demo" && !scenario)}
+              className="rounded bg-indigo-600 px-3 py-2 text-sm text-white disabled:opacity-40"
+              onClick={() =>
+                act(() =>
+                  apiFetch(`/api/items/${item.id}/render`, {
+                    method: "POST",
+                    body: JSON.stringify({
+                      format: fmt,
+                      scenario: fmt === "demo" ? scenario : null,
+                    }),
+                  })
+                )
+              }
+            >
+              สร้างวิดีโอ
+            </button>
+          </div>
+        </div>
+      )}
+      {item.status === "rendering" && (
+        <p className="text-sm text-indigo-600">กำลังสร้างวิดีโอ… (ปกติ 2–5 นาที)</p>
+      )}
+      {item.render_error && (
+        <p className="text-sm text-red-600">เรนเดอร์ล้มเหลว: {item.render_error}</p>
       )}
       {item.status === "in_review" && (
         <div className="space-y-2">
