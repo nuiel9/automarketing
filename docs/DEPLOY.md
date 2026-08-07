@@ -339,14 +339,25 @@ this build will actually be deployed.
 ### Create the job (one-time)
 
 ```bash
+# Reuse the same recipient the backend already alerts on failure — fetch it
+# rather than retype it:
+LINE_FOUNDER_USER_ID=$(gcloud run services describe "$BACKEND_SVC" --region="$REGION" --project="$PROJECT" \
+  --format='value(spec.template.spec.containers[0].env.filter("name:LINE_FOUNDER_USER_ID").firstof("value"))')
+
 gcloud run jobs create automarketing-render \
   --image="${REGION}-docker.pkg.dev/${PROJECT}/${REPO}/render:latest" \
   --region="$REGION" --project="$PROJECT" \
   --cpu=2 --memory=4Gi --task-timeout=15m --max-retries=0 \
   --network=default --subnet=default --vpc-egress=private-ranges-only \
-  --set-env-vars="^##^DATABASE_URL=postgresql+psycopg://${DB_USER}:${DB_PASSWORD}@172.28.0.9:5432/${DB_NAME}##MEDIA_BACKEND=gcs##GCS_BUCKET=${BUCKET}##MEDIA_ROOT=/tmp" \
-  --set-secrets="GEMINI_API_KEY=GEMINI_API_KEY:latest"
+  --set-env-vars="^##^DATABASE_URL=postgresql+psycopg://${DB_USER}:${DB_PASSWORD}@172.28.0.9:5432/${DB_NAME}##MEDIA_BACKEND=gcs##GCS_BUCKET=${BUCKET}##MEDIA_ROOT=/tmp##LINE_FOUNDER_USER_ID=${LINE_FOUNDER_USER_ID}" \
+  --set-secrets="GEMINI_API_KEY=GEMINI_API_KEY:latest,LINE_CHANNEL_ACCESS_TOKEN=eduverse-line-access-token:latest"
 ```
+
+Without `LINE_FOUNDER_USER_ID`/`LINE_CHANNEL_ACCESS_TOKEN`, `app/notify.py`'s
+`line_notify` silently no-ops on every render failure (it early-returns
+before attempting to send when either is unset) — §12 step 2 below assumes
+this alert fires, so a job created without these two would make that step's
+expectation false.
 
 > **`DEMO_EMAIL` / `DEMO_PASSWORD` are deliberately omitted here.** They are
 > meant to be a **production eduverse.one account with credits**, created by
