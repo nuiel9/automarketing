@@ -1,3 +1,5 @@
+import pytest
+
 from app.config import Settings
 from app.video.dispatcher import CloudRunDispatcher, LocalDispatcher, get_dispatcher
 
@@ -5,6 +7,11 @@ from app.video.dispatcher import CloudRunDispatcher, LocalDispatcher, get_dispat
 def test_get_dispatcher_selects_by_setting():
     assert isinstance(get_dispatcher(Settings(render_dispatcher="local")), LocalDispatcher)
     assert isinstance(get_dispatcher(Settings(render_dispatcher="cloudrun")), CloudRunDispatcher)
+
+
+def test_get_dispatcher_rejects_unknown_setting():
+    with pytest.raises(ValueError):
+        get_dispatcher(Settings(render_dispatcher="bogus"))
 
 
 def test_cloudrun_dispatch_builds_expected_job_path(monkeypatch):

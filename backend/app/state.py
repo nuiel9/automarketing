@@ -4,7 +4,12 @@ ITEM_TRANSITIONS: dict[str, set[str]] = {
     "idea": {"in_review", "rendering"},
     "planned": {"rendering", "rejected"},      # Phase 2+
     "rendering": {"in_review", "failed"},      # Phase 2+
-    "in_review": {"approved", "rejected"},
+    # in_review -> rendering: an item without a video (created but not yet
+    # rendered, or already reviewed with captions) can still have one
+    # generated -- rendering isn't gated on review status, only on whether
+    # media exists (the frontend's render control instead gates on
+    # !media_url; see Task 10).
+    "in_review": {"approved", "rejected", "rendering"},
     "approved": {"scheduled"},
     "scheduled": {"posted", "failed"},
     "posted": set(),

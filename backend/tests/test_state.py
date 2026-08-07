@@ -33,7 +33,9 @@ def test_invalid_transitions_raise(src, dst):
         transition(make(src), dst)
 
 
-@pytest.mark.parametrize("src,dst", [("idea", "rendering"), ("failed", "rendering")])
+@pytest.mark.parametrize(
+    "src,dst", [("idea", "rendering"), ("failed", "rendering"), ("in_review", "rendering")]
+)
 def test_render_transitions_allowed(src, dst):
     item = make(src)
     transition(item, dst)
@@ -41,13 +43,13 @@ def test_render_transitions_allowed(src, dst):
 
 
 def test_item_transitions_full_map():
-    # Guards the whole state machine, not just the two Phase 2 edges above —
+    # Guards the whole state machine, not just the Phase 2 edges above —
     # a silent edit to any other entry would otherwise pass review unnoticed.
     assert ITEM_TRANSITIONS == {
         "idea": {"in_review", "rendering"},
         "planned": {"rendering", "rejected"},
         "rendering": {"in_review", "failed"},
-        "in_review": {"approved", "rejected"},
+        "in_review": {"approved", "rejected", "rendering"},
         "approved": {"scheduled"},
         "scheduled": {"posted", "failed"},
         "posted": set(),

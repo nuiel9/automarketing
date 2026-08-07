@@ -37,10 +37,11 @@ def scenario_root(monkeypatch):
 def test_render_moves_item_to_rendering_and_dispatches(client_with_db, db, fake_dispatch):
     # Deliberately not _create(): that helper uploads a file and always runs
     # _generate(), which transitions idea -> in_review on caption success --
-    # so a _create()d item is never a valid "idea"/no-media render candidate
-    # (state.py only allows idea -> rendering and failed -> rendering; see
-    # Task 10's own render-button guard: status in (idea, failed) with no
-    # media_url). Construct the item directly in "idea", same pattern as
+    # so a _create()d item is never a fresh "idea"/no-media item (state.py
+    # allows idea -> rendering, failed -> rendering, and now in_review ->
+    # rendering too -- see test_render_from_in_review_item_succeeds below
+    # for that path; Task 10's render control gates on !media_url rather
+    # than status). Construct the item directly in "idea", same pattern as
     # test_render_from_posted_item_is_409 below.
     from app.models import ContentItem
     item = ContentItem(slug="w32-video-x", topic="t", status="idea")
@@ -54,6 +55,30 @@ def test_render_moves_item_to_rendering_and_dispatches(client_with_db, db, fake_
     assert body["status"] == "rendering"
     assert body["scenario"] == "fixture-demo"
     assert fake_dispatch == [item.id]
+
+
+def test_render_from_in_review_item_succeeds(client_with_db, fake_dispatch):
+    # _create() always ends with the item in_review (captions generate
+    # successfully, per patch_deps). An item that's been reviewed but has
+    # no video yet must still be renderable -- the render control isn't
+    # gated on review status, only on whether media exists.
+    item = _create(client_with_db).json()
+    assert item["status"] == "in_review"
+    resp = client_with_db.post(
+        f"/api/items/{item['id']}/render",
+        json={"format": "tips"}, headers=AUTH,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "rendering"
+    assert fake_dispatch == [item["id"]]
+
+
+def test_bad_format_is_422(client_with_db):
+    item = _create(client_with_db).json()
+    resp = client_with_db.post(
+        f"/api/items/{item['id']}/render", json={"format": "founder_clip"}, headers=AUTH
+    )
+    assert resp.status_code == 422
 
 
 def test_demo_without_scenario_is_422(client_with_db):
@@ -81,3 +106,33 @@ def test_render_from_posted_item_is_409(client_with_db, db):
         f"/api/items/{item.id}/render", json={"format": "tips"}, headers=AUTH
     )
     assert resp.status_code == 409
+
+
+def test_dispatch_failure_marks_item_failed_and_notifies(client_with_db, db, monkeypatch):
+    from app.models import ContentItem
+    item = ContentItem(slug="w32-video-z", topic="t", status="idea")
+    db.add(item); db.commit()
+
+    class BoomDispatcher:
+        def dispatch(self, item_id):
+            raise RuntimeError("cloud run unavailable")
+
+    monkeypatch.setattr(items_api, "get_dispatcher", lambda s: BoomDispatcher())
+    notes = []
+    monkeypatch.setattr(items_api, "line_notify", notes.append)
+
+    resp = client_with_db.post(
+        f"/api/items/{item.id}/render", json={"format": "tips"}, headers=AUTH
+    )
+    assert resp.status_code == 502
+
+    # A fresh request/response cycle, not db.refresh() on the same
+    # in-process object: client_with_db's get_session override yields the
+    # very same `db` session the test holds, so refreshing that object only
+    # proves the change is visible in-transaction, not that it was
+    # committed. Reading it back over the API proves the failed state is
+    # actually durable.
+    got = client_with_db.get(f"/api/items/{item.id}", headers=AUTH).json()
+    assert got["status"] == "failed"
+    assert got["render_error"] and "cloud run unavailable" in got["render_error"]
+    assert notes

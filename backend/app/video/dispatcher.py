@@ -47,4 +47,6 @@ class LocalDispatcher:
 def get_dispatcher(settings: Settings) -> RenderDispatcher:
     if settings.render_dispatcher == "local":
         return LocalDispatcher()
-    return CloudRunDispatcher(settings)
+    if settings.render_dispatcher == "cloudrun":
+        return CloudRunDispatcher(settings)
+    raise ValueError(f"unknown render_dispatcher: {settings.render_dispatcher!r}")

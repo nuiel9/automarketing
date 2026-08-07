@@ -156,7 +156,9 @@ def run_tick(
         _settle_item(pub.item)
 
     stuck = session.scalars(
-        select(ContentItem).where(ContentItem.status == "rendering")
+        select(ContentItem)
+        .where(ContentItem.status == "rendering")
+        .with_for_update(skip_locked=True)
     ).all()
     for item in stuck:
         if now - _aware(item.updated_at) <= RENDER_MAX_AGE:

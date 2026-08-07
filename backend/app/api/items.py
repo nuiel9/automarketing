@@ -12,6 +12,7 @@ from app.config import get_settings
 from app.db import get_session
 from app.media import get_store
 from app.models import Caption, ContentItem, Publication
+from app.notify import line_notify
 from app.state import InvalidTransition, transition
 from app.strategy import banned_violations, load_strategy
 from app.utm import campaign_slug
@@ -292,6 +293,26 @@ def render(item_id: str, body: RenderBody, session: Session = Depends(get_sessio
     item.format = body.format
     item.scenario = body.scenario
     item.render_error = None
-    session.flush()
-    get_dispatcher(get_settings()).dispatch(item.id)
+    # Commit (not just flush) here: the render worker opens its own session
+    # against the same row. If we only flushed, the worker could read the
+    # stale pre-render row before this transaction commits, take its own
+    # error path against that stale data, and have its write overwritten --
+    # landing the item at "rendering" with render_error=None and no process
+    # watching it. Committing makes the transition durable before dispatch,
+    # regardless of what the dispatcher does next.
+    session.commit()
+    try:
+        get_dispatcher(get_settings()).dispatch(item.id)
+    except Exception as exc:
+        item.render_error = str(exc)
+        # Guard rather than call transition() unconditionally: item.status is
+        # "rendering" on every path that reaches here today (set just above,
+        # right before the commit), but if that ever changes, an
+        # InvalidTransition raised here would replace this 502 with a bare
+        # 500 and skip the notify below.
+        if item.status == "rendering":
+            transition(item, "failed")
+        session.commit()
+        line_notify(f"[AutoMarketing] render dispatch failed for {item.slug}: {exc}")
+        raise HTTPException(502, f"could not start render: {exc}")
     return item_json(item)
