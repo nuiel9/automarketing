@@ -19,11 +19,18 @@ COPY backend/app ./app
 COPY backend/alembic.ini ./
 COPY backend/alembic ./alembic
 COPY strategy.yaml ./strategy.yaml
+# The render endpoint (app/api/items.py's module-level SCENARIO_ROOT)
+# validates `{"format": "demo", "scenario": ...}` bodies against the scenario
+# files on disk *in this image*, before ever dispatching to the render job —
+# without this COPY every demo-format render 422s "scenario not found" even
+# though scenarios/ exists in the render image.
+COPY scenarios ./scenarios
 
 # Default strategy_path ("./strategy.yaml", resolved from process CWD) already
 # matches where the file lands above; set explicitly so the image is correct
-# even if config.py's default ever changes.
+# even if config.py's default ever changes. Same reasoning for SCENARIO_ROOT.
 ENV STRATEGY_PATH=./strategy.yaml
+ENV SCENARIO_ROOT=./scenarios
 ENV PYTHONUNBUFFERED=1
 
 EXPOSE 8080

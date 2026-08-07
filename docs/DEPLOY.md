@@ -308,3 +308,151 @@ gcloud run services update "$BACKEND_SVC" --region="$REGION" --project="$PROJECT
 > **Why `/health`, not `/healthz`:** Google's frontend intercepts the exact
 > path `/healthz` on `*.run.app` hosts and serves its own 404 without
 > forwarding to the container. Do not name a route `/healthz` on Cloud Run.
+
+## 10. Render job (Phase 2 — Video Factory)
+
+`render/Dockerfile` packages the Playwright demo renderer, the tips
+renderer, ffmpeg composition, and Kavee TTS as the `automarketing-render`
+Cloud Run **Job** — dispatched by the backend's `CloudRunDispatcher`
+(`app/video/dispatcher.py`) whenever `POST /api/items/{id}/render` is
+called. It reuses the same private-IP Cloud SQL path and GCS media bucket
+as the backend (Direct VPC egress, not the `/cloudsql` socket — a Job has
+no `--add-cloudsql-instances` equivalent worth using here since we already
+have the private IP working for the backend).
+
+Build it via `cloudbuild.yaml` (adds a third build+push step pair, `-f
+render/Dockerfile`, repo-root context — same reasoning as the backend image:
+`COPY scenarios` and `COPY strategy.yaml` both need paths above `render/`):
+
+```bash
+gcloud builds submit --config=cloudbuild.yaml \
+  --substitutions=_BACKEND_URL="$BACKEND_URL" \
+  --region="$REGION" --project="$PROJECT" \
+  .
+```
+
+This rebuilds all three images (backend, frontend, render) in one pipeline;
+`docs/DEPLOY.md` step 5 already documents why `_BACKEND_URL` must be the
+real deployed backend URL, not a placeholder, if the frontend image from
+this build will actually be deployed.
+
+### Create the job (one-time)
+
+```bash
+gcloud run jobs create automarketing-render \
+  --image="${REGION}-docker.pkg.dev/${PROJECT}/${REPO}/render:latest" \
+  --region="$REGION" --project="$PROJECT" \
+  --cpu=2 --memory=4Gi --task-timeout=15m --max-retries=0 \
+  --network=default --subnet=default --vpc-egress=private-ranges-only \
+  --set-env-vars="^##^DATABASE_URL=postgresql+psycopg://${DB_USER}:${DB_PASSWORD}@172.28.0.9:5432/${DB_NAME}##MEDIA_BACKEND=gcs##GCS_BUCKET=${BUCKET}##MEDIA_ROOT=/tmp" \
+  --set-secrets="GEMINI_API_KEY=GEMINI_API_KEY:latest"
+```
+
+> **`DEMO_EMAIL` / `DEMO_PASSWORD` are deliberately omitted here.** They are
+> meant to be a **production eduverse.one account with credits**, created by
+> the founder — this session has no such account and cannot create one.
+> Each `demo`-format render logs into the real site and consumes credits on
+> whatever account those secrets point at, so do not fabricate a value.
+> Until the founder provides one and the secrets below exist, **`demo`-format
+> renders will fail** (the demo renderer runs against production
+> `https://eduverse.one/th` regardless of login; without a matching
+> `data-testid=email`/`password` account most scenario steps won't match the
+> live DOM either) — **`tips`-format renders do not need this and work
+> today.** Once the founder hands over credentials:
+>
+> ```bash
+> printf '%s' "$DEMO_EMAIL_VALUE"    | gcloud secrets create DEMO_EMAIL    --data-file=- --project="$PROJECT"
+> printf '%s' "$DEMO_PASSWORD_VALUE" | gcloud secrets create DEMO_PASSWORD --data-file=- --project="$PROJECT"
+> for SECRET in DEMO_EMAIL DEMO_PASSWORD; do
+>   gcloud secrets add-iam-policy-binding "$SECRET" \
+>     --member="serviceAccount:${RUNTIME_SA}" \
+>     --role=roles/secretmanager.secretAccessor --project="$PROJECT"
+> done
+> gcloud run jobs update automarketing-render --region="$REGION" --project="$PROJECT" \
+>   --update-secrets="DEMO_EMAIL=DEMO_EMAIL:latest,DEMO_PASSWORD=DEMO_PASSWORD:latest"
+> ```
+
+### Grant the backend permission to run the job, and point it at the job
+
+```bash
+gcloud projects add-iam-policy-binding "$PROJECT" \
+  --member="serviceAccount:${RUNTIME_SA}" --role=roles/run.developer
+
+gcloud run services update "$BACKEND_SVC" --region="$REGION" --project="$PROJECT" \
+  --update-env-vars="RENDER_DISPATCHER=cloudrun,GCP_PROJECT=${PROJECT},RENDER_JOB_NAME=automarketing-render,RENDER_JOB_REGION=${REGION}"
+```
+
+`roles/run.developer` at project scope is broader than "can execute this one
+job" but is what `run_v2.JobsClient().run_job()` needs and matches this
+project's existing IAM granularity (no per-resource Cloud Run IAM bindings
+used elsewhere in this runbook).
+
+## 11. Run migration 0002 in production
+
+```bash
+gcloud run jobs update automarketing-migrate --region="$REGION" --project="$PROJECT" \
+  --image="${REGION}-docker.pkg.dev/${PROJECT}/${REPO}/backend:latest"
+gcloud run jobs execute automarketing-migrate --region="$REGION" --project="$PROJECT" --wait
+```
+
+Expected: `gcloud logging read` (or the Cloud Build/Run job logs UI) for
+that execution shows alembic's `Running upgrade 0001 -> 0002`.
+
+## 12. Render verification
+
+1. **Tips render (no demo account required):**
+
+   ```bash
+   ITEM=$(curl -s -X POST "${BACKEND_URL}/api/items" \
+     -H "Authorization: Bearer ${ADMIN_TOKEN_VALUE}" \
+     -F "topic=render smoke test")
+   ITEM_ID=$(echo "$ITEM" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+
+   curl -s -X POST "${BACKEND_URL}/api/items/${ITEM_ID}/render" \
+     -H "Authorization: Bearer ${ADMIN_TOKEN_VALUE}" -H "Content-Type: application/json" \
+     -d '{"format": "tips"}'
+   ```
+
+   Poll (a real render takes a few minutes — ffmpeg composition + Gemini TTS
+   for every card):
+
+   ```bash
+   curl -s "${BACKEND_URL}/api/items/${ITEM_ID}" -H "Authorization: Bearer ${ADMIN_TOKEN_VALUE}" \
+     | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d["status"], d["media_url"], d["render_error"])'
+   ```
+
+   Expect `status` to reach `in_review` with a non-null `media_url` and a
+   null `render_error` within ~10 minutes. Download the MP4
+   (`curl -s -o out.mp4 "$MEDIA_URL"`, no auth header — `/media/{token}` is
+   the public route) and verify with `ffprobe`:
+   - resolution `1080x1920`
+   - at least one audio stream present
+   - non-trivial duration (several seconds, not a near-zero clip)
+
+   Then extract a frame that lands on a burned Thai subtitle
+   (`ffmpeg -ss <t> -i out.mp4 -frames:v 1 frame.png`) and inspect it — real
+   Thai glyphs, not tofu boxes (☐) or dotted-circle combining marks (the
+   telltale sign the burned-in font family didn't resolve). This is the
+   actual verification that `fonts-noto-core`'s `NotoSansThai-Regular.ttf`
+   at `/usr/share/fonts/truetype/noto/` (the exact path
+   `backend/app/video/compose.py`'s `FONT` constant expects) is present and
+   used correctly in the Linux render image — a macOS dev machine passes
+   this even with a bogus font family via OS-level script fallback, so
+   local success proves nothing.
+
+2. **Demo render (expected to fail cleanly, no demo account yet):**
+
+   ```bash
+   curl -s -X POST "${BACKEND_URL}/api/items/${ITEM_ID}/render" \
+     -H "Authorization: Bearer ${ADMIN_TOKEN_VALUE}" -H "Content-Type: application/json" \
+     -d '{"format": "demo", "scenario": "fixture-demo"}'
+   ```
+
+   Poll the same way. Expect the item to land in `status: "failed"` with a
+   non-null, human-readable `render_error` (not a hang, not a 500 with no
+   trace) within a couple of minutes, and a LINE alert to
+   `LINE_FOUNDER_USER_ID` (`app/notify.py`'s `line_notify`, called from
+   `app/video/worker.py`'s failure branch). Once the founder provides
+   `DEMO_EMAIL`/`DEMO_PASSWORD` (see §10) and a real scenario matching
+   production `eduverse.one/th`'s DOM, re-run this check expecting success
+   instead.

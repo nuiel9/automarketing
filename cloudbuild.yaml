@@ -51,11 +51,35 @@ steps:
   - name: gcr.io/cloud-builders/docker
     args: ["push", "--all-tags", "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/frontend"]
 
+  # Render (Cloud Run Job): repo-root context, same reasoning as backend —
+  # render/Dockerfile's `COPY scenarios` and `COPY strategy.yaml` both need
+  # to see paths above render/.
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - render/Dockerfile
+      - -t
+      - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/render:$BUILD_ID"
+      - -t
+      - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/render:latest"
+      - .
+  - name: gcr.io/cloud-builders/docker
+    args: ["push", "--all-tags", "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/render"]
+
 images:
   - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/backend:$BUILD_ID"
   - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/backend:latest"
   - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/frontend:$BUILD_ID"
   - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/frontend:latest"
+  - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/render:$BUILD_ID"
+  - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/render:latest"
 
 options:
   logging: CLOUD_LOGGING_ONLY
+
+# Default build timeout (10m) covered backend+frontend alone; the render
+# step's base image (mcr.microsoft.com/playwright/python, ~2GB with
+# Chromium baked in) plus its apt-get install push the full three-image
+# pipeline past that comfortably.
+timeout: 1800s
