@@ -1,8 +1,14 @@
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 import app.api.items as items_api
+from app.db import get_session
+from app.main import create_app
+from app.models import Base, ContentItem
 from tests.test_items_api import AUTH, _create, patch_deps  # noqa: F401 -- reuse Phase 1 helpers
 # patch_deps is autouse in test_items_api.py, but pytest only auto-applies an
 # autouse fixture to tests in modules where it's a bound name -- importing it
@@ -126,13 +132,120 @@ def test_dispatch_failure_marks_item_failed_and_notifies(client_with_db, db, mon
     )
     assert resp.status_code == 502
 
-    # A fresh request/response cycle, not db.refresh() on the same
-    # in-process object: client_with_db's get_session override yields the
-    # very same `db` session the test holds, so refreshing that object only
-    # proves the change is visible in-transaction, not that it was
-    # committed. Reading it back over the API proves the failed state is
-    # actually durable.
+    # This assertion is NOT load-bearing for durability -- see the
+    # file-backed-session tests below for why, and for the check that
+    # actually is. client_with_db's get_session override (`lambda: (yield
+    # db)`) hands out the SAME session object for every request in this
+    # test, and never commits it. So this GET reads the mutated ContentItem
+    # straight out of that session's identity map, in-transaction -- it
+    # would pass identically whether the except block below called
+    # session.commit() or session.flush(). It's kept because it still
+    # proves the response *contract* (status code, body shape), just not
+    # persistence.
     got = client_with_db.get(f"/api/items/{item.id}", headers=AUTH).json()
     assert got["status"] == "failed"
     assert got["render_error"] and "cloud run unavailable" in got["render_error"]
     assert notes
+
+
+def _durable_client(tmp_path, db_name):
+    # Mirrors app/db.py's production get_session generator (commit-after-
+    # yield) on a file-backed sqlite engine -- unlike client_with_db (a
+    # single shared, never-committed session), each request here opens its
+    # own session against a real file, so only a `session.commit()` in the
+    # handler makes a write visible to a DIFFERENT session opened later.
+    # Same pattern as test_tick_api.py::test_tick_happy_path_persists_across_sessions.
+    engine = create_engine(f"sqlite:///{tmp_path / db_name}")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine)
+
+    def override_get_session():
+        with session_factory() as s:
+            yield s
+            s.commit()
+
+    app = create_app()
+    app.dependency_overrides[get_session] = override_get_session
+    return TestClient(app), session_factory
+
+
+def test_dispatch_failure_persists_across_sessions(tmp_path, monkeypatch):
+    # Round-2 fix: test_dispatch_failure_marks_item_failed_and_notifies above
+    # cannot detect a regression that downgrades the except block's
+    # session.commit() to session.flush() (or deletes it) -- it passed
+    # unchanged under both in review. This test can: it asserts through a
+    # brand-new session on the same file-backed engine, which only sees
+    # committed data.
+    client, session_factory = _durable_client(tmp_path, "render_fail.sqlite")
+
+    with session_factory() as seed_session:
+        item = ContentItem(slug="w32-video-fail", topic="t", status="idea")
+        seed_session.add(item)
+        seed_session.commit()
+        item_id = item.id
+
+    class BoomDispatcher:
+        def dispatch(self, item_id):
+            raise RuntimeError("cloud run unavailable")
+
+    monkeypatch.setattr(items_api, "get_dispatcher", lambda s: BoomDispatcher())
+    notes = []
+    monkeypatch.setattr(items_api, "line_notify", notes.append)
+
+    resp = client.post(
+        f"/api/items/{item_id}/render", json={"format": "tips"}, headers=AUTH
+    )
+    assert resp.status_code == 502
+
+    with session_factory() as fresh_session:
+        row = fresh_session.get(ContentItem, item_id)
+        assert row.status == "failed"
+        assert row.render_error and "cloud run unavailable" in row.render_error
+
+
+def test_dispatch_success_persists_across_sessions(tmp_path, monkeypatch):
+    # Companion to the failure-path test above -- and NOT the same shape.
+    # get_session's own generator commits after the handler returns
+    # (mirroring app/db.py), on success as well as on the code path this
+    # test exercises. So by the time the whole request has finished, the
+    # row is committed either way, regardless of whether the handler's OWN
+    # session.commit() (called before dispatch(), per the commit-before-
+    # dispatch fix) ran or was downgraded to flush()/deleted -- checked this
+    # empirically: an end-of-request assertion here does NOT fail when that
+    # commit is removed.
+    #
+    # What actually distinguishes commit-before-dispatch from flush-before-
+    # dispatch is durability AT THE MOMENT dispatch() runs, mid-request --
+    # exactly the render-worker race the fix exists for (a worker opening
+    # its own session/connection against the same row before this request's
+    # transaction commits). So the dispatcher stub here reads the row back
+    # through a brand-new, independent session from INSIDE dispatch()
+    # itself, synchronously, before the request handler ever returns.
+    client, session_factory = _durable_client(tmp_path, "render_ok.sqlite")
+
+    with session_factory() as seed_session:
+        item = ContentItem(slug="w32-video-ok", topic="t", status="idea")
+        seed_session.add(item)
+        seed_session.commit()
+        item_id = item.id
+
+    seen = {}
+
+    class ProbeDispatcher:
+        def dispatch(self, dispatched_item_id):
+            with session_factory() as probe_session:
+                row = probe_session.get(ContentItem, dispatched_item_id)
+                seen["status"] = row.status
+                seen["format"] = row.format
+                seen["scenario"] = row.scenario
+
+    monkeypatch.setattr(items_api, "get_dispatcher", lambda s: ProbeDispatcher())
+
+    resp = client.post(
+        f"/api/items/{item_id}/render",
+        json={"format": "demo", "scenario": "fixture-demo"}, headers=AUTH,
+    )
+    assert resp.status_code == 200
+    assert seen["status"] == "rendering"
+    assert seen["format"] == "demo"
+    assert seen["scenario"] == "fixture-demo"
