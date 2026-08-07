@@ -16,7 +16,7 @@ dependencies = [
   "pyyaml>=6.0",
   "google-cloud-storage>=2.18",
   "python-multipart>=0.0.9",
-  "playwright>=1.49",
+  "playwright>=1.62,<2",
 ]
 
 [project.optional-dependencies]

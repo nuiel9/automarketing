@@ -53,6 +53,13 @@ def render_demo(
             locale="th-TH",
         )
         page = context.new_page()
+        # t0 must be captured here, immediately after the page (and thus the
+        # video recording) is created -- not after goto/login below -- so the
+        # mark timeline shares its origin with the recording. Marks captured
+        # after goto/login would be offset from the video's real t=0 by
+        # however long navigation/login took, causing every cut clip to
+        # start too early and show the wrong footage (see task-6 fix report).
+        t0 = time.monotonic()
         page.goto(base_url, timeout=60_000)
 
         if scenario.login and login:
@@ -62,7 +69,6 @@ def render_demo(
             page.click("[data-testid=login-submit]")
             page.wait_for_load_state("networkidle", timeout=60_000)
 
-        t0 = time.monotonic()
         for index, step in enumerate(scenario.steps):
             start = time.monotonic() - t0
             try:
