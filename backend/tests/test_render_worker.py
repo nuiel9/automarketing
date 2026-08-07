@@ -41,6 +41,86 @@ def test_successful_render_stores_media_and_moves_to_review(db, tmp_path, monkey
     assert item.render_error is None
 
 
+def test_poster_upload_failure_leaves_media_path_none_and_marks_failed(db, tmp_path, monkeypatch):
+    # Fix 1 (post-review): item.media_path must only be assigned once BOTH
+    # the video and the poster upload have succeeded. Assigning it right
+    # after the video upload would let a poster-upload failure land the
+    # item in "failed" while media_path still pointed at a real, playable
+    # video -- both items.py's media_url and the /media/{token} route gate
+    # only on media_path being truthy, never on status.
+    item = _item(db)
+    seg = Segment("clip.mp4", Narration("t", "n.wav", 1.0))
+    monkeypatch.setattr(worker, "_render_segments", lambda *a, **k: ([seg], "hook"))
+    monkeypatch.setattr(worker, "compose",
+                        lambda segs, hook, work_dir: (str(tmp_path / "f.mp4"), str(tmp_path / "p.jpg")))
+    for name in ("f.mp4", "p.jpg"):
+        (tmp_path / name).write_bytes(b"x")
+
+    def _store_factory(settings):
+        class S:
+            def save(self, data, filename):
+                if filename == "poster.jpg":
+                    raise RuntimeError("disk full")
+                return "stored/" + filename
+        return S()
+
+    monkeypatch.setattr(worker, "get_store", _store_factory)
+    notes = []
+
+    worker.render_item(db, item.id, notify=notes.append)
+
+    db.refresh(item)
+    assert item.status == "failed"
+    assert item.media_path is None
+    assert "disk full" in item.render_error
+    assert notes
+
+
+def test_success_commit_failure_is_logged_and_reraised(db, tmp_path, monkeypatch, caplog):
+    # Fix 2 (post-review): a commit failure after a successful render must
+    # not be silent -- it's logged (in addition to being re-raised so the
+    # caller still learns about it), rather than leaving the item stuck in
+    # "rendering" with nothing recorded anywhere.
+    item = _item(db)
+    seg = Segment("clip.mp4", Narration("t", "n.wav", 1.0))
+    monkeypatch.setattr(worker, "_render_segments", lambda *a, **k: ([seg], "hook"))
+    monkeypatch.setattr(worker, "compose",
+                        lambda segs, hook, work_dir: (str(tmp_path / "f.mp4"), str(tmp_path / "p.jpg")))
+    for name in ("f.mp4", "p.jpg"):
+        (tmp_path / name).write_bytes(b"x")
+    monkeypatch.setattr(worker, "get_store", _fake_store({}))
+
+    def _boom_commit():
+        raise RuntimeError("db is down")
+
+    monkeypatch.setattr(db, "commit", _boom_commit)
+
+    with caplog.at_level("ERROR", logger="app.video.worker"):
+        with pytest.raises(RuntimeError, match="db is down"):
+            worker.render_item(db, item.id, notify=lambda m: None)
+
+    assert any("failed to commit result" in r.message for r in caplog.records)
+
+
+def test_upload_screenshot_failure_logs_warning(tmp_path, monkeypatch, caplog):
+    # Fix 3 (post-review): a bare "except Exception: return None" made an
+    # upload failure indistinguishable from "no screenshot existed". A
+    # log.warning makes a future regression diagnosable.
+    shot = tmp_path / "s.png"
+    shot.write_bytes(b"x")
+
+    def _boom_store(settings):
+        raise RuntimeError("store unavailable")
+
+    monkeypatch.setattr(worker, "get_store", _boom_store)
+
+    with caplog.at_level("WARNING", logger="app.video.worker"):
+        ref = worker._upload_screenshot(str(shot))
+
+    assert ref is None
+    assert any("failed to upload failure screenshot" in r.message for r in caplog.records)
+
+
 def test_step_failure_marks_failed_and_notifies(db, monkeypatch):
     item = _item(db)
     notes = []

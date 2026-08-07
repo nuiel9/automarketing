@@ -1,3 +1,4 @@
+import logging
 import os
 import tempfile
 
@@ -12,6 +13,8 @@ from app.video.compose import compose
 from app.video.demo import RenderStepError, render_demo
 from app.video.scenario import ScenarioError, load_scenario
 from app.video.tips import render_tips, write_tips
+
+log = logging.getLogger(__name__)
 
 SCENARIO_ROOT = os.environ.get("SCENARIO_ROOT", "./scenarios")
 
@@ -51,6 +54,12 @@ def _upload_screenshot(path: str | None) -> str | None:
         with open(path, "rb") as f:
             return store.save(f, os.path.basename(path))
     except Exception:
+        # Distinguish "upload failed" from "no screenshot existed" in the
+        # logs -- both currently return None to the caller by design (a
+        # broken screenshot upload must not itself crash the exception
+        # handler), but a silent failure here is otherwise indistinguishable
+        # from a future regression that stops passing a screenshot at all.
+        log.warning("failed to upload failure screenshot %s", path, exc_info=True)
         return None
 
 
@@ -65,9 +74,18 @@ def render_item(session, item_id: str, notify=line_notify) -> None:
             mp4, poster = compose(segments, hook, work_dir)
             store = get_store(get_settings())
             with open(mp4, "rb") as f:
-                item.media_path = store.save(f, "video.mp4")
+                video_ref = store.save(f, "video.mp4")
             with open(poster, "rb") as f:
                 store.save(f, "poster.jpg")
+            # Only point the item at the uploaded video once BOTH uploads
+            # have succeeded. Assigning item.media_path right after the
+            # video upload (before the poster upload could still raise)
+            # would let a poster-upload failure land the item in "failed"
+            # while media_path still pointed at a real, playable video --
+            # both items.py's media_url and the /media/{token} route gate
+            # only on media_path being truthy, never on status, so the
+            # founder would see a failed item that plays.
+            item.media_path = video_ref
             item.render_error = None
             transition(item, "in_review")
         except Exception as exc:
@@ -87,7 +105,18 @@ def render_item(session, item_id: str, notify=line_notify) -> None:
             # long enough on its own to fill the 300-char budget.
             notify(f"[AutoMarketing] render failed for {item.slug}: {detail[:300]}{suffix}")
         finally:
-            session.commit()
+            try:
+                session.commit()
+            except Exception:
+                # On the failure branch notify() has already fired, so the
+                # founder still hears about it even if this commit is lost.
+                # On the success branch there is no such backstop -- a
+                # commit failure here would otherwise leave the item stuck
+                # in "rendering" with nothing logged anywhere. Log either
+                # way and re-raise so the caller (e.g. the dispatcher) still
+                # sees the failure.
+                log.exception("render_item: failed to commit result for item %s", item_id)
+                raise
 
 
 def main() -> None:
