@@ -44,6 +44,30 @@ def test_write_tips_wraps_errors(monkeypatch):
         write_tips("x", STRATEGY)
 
 
+def test_write_tips_raises_when_zero_cards(monkeypatch):
+    empty = TipSet(hook="ไม่มีการ์ด", cards=[])
+    fake = FakeClient(empty.model_dump_json())
+    monkeypatch.setattr(tips_mod, "_genai_client", lambda: fake)
+    with pytest.raises(TipsError):
+        write_tips("x", STRATEGY)
+
+
+def test_card_html_escapes_script_injection():
+    card = TipCard(headline="<script>alert(1)</script>", body="ok")
+    html_out = tips_mod._card_html(card, 1)
+    assert "&lt;script&gt;" in html_out
+    assert "<script>alert(1)</script>" not in html_out
+
+
+@pytest.mark.slow
+def test_render_card_with_script_headline_produces_png(tmp_path):
+    card = TipCard(headline="<script>alert(1)</script>", body="ok")
+    png = str(tmp_path / "card.png")
+    tips_mod._card_png(card, 1, png)
+    assert os.path.exists(png)
+    assert os.path.getsize(png) > 0
+
+
 @pytest.mark.slow
 def test_render_tips_produces_one_segment_per_card(tmp_path, monkeypatch):
     import subprocess
