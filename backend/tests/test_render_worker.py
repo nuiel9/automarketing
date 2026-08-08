@@ -390,3 +390,58 @@ def test_broken_strategy_file_costs_the_music_not_the_render(db, tmp_path, monke
     db.refresh(item)
     assert item.status == "in_review"
     assert calls[0]["music_track"] is None
+
+
+def test_a_valid_strategy_actually_selects_music_for_both_formats(db, tmp_path, monkeypatch):
+    """The positive case: with a real config, a track reaches compose().
+
+    Every other test in this file runs with no strategy.yaml on the worker's
+    cwd, so _music_for takes its degradation branch and hands compose()
+    music_track=None. Without this test, _music_for could return None
+    unconditionally and the whole suite would still pass -- while every
+    shipped video came out silent of music.
+    """
+    import app.video.music as music_mod
+    from app.strategy import MusicConfig, Strategy
+
+    root = tmp_path / "music"
+    root.mkdir()
+    for name in ("city-sunshine", "inspiration"):
+        (root / f"{name}.mp3").write_bytes(b"not really an mp3, only the lookup is under test")
+
+    strategy = Strategy(
+        voice="v", audiences=["a"], banned_words=[], platform_notes={},
+        music=MusicConfig(tips=["city-sunshine"], demo=["inspiration"]),
+    )
+    monkeypatch.setattr(worker, "load_strategy", lambda path: strategy)
+    # pick_track binds MUSIC_ROOT as a default argument at import time, so the
+    # root has to be threaded through rather than patched onto the module.
+    monkeypatch.setattr(worker, "pick_track",
+                        lambda ids, key: music_mod.pick_track(ids, key, str(root)))
+
+    for fmt, expected in (("demo", "inspiration.mp3"), ("tips", "city-sunshine.mp3")):
+        item = ContentItem(slug=f"w32-{fmt}-music", topic="หัวข้อ", status="rendering",
+                           format=fmt, scenario="fixture-demo" if fmt == "demo" else None)
+        db.add(item); db.commit()
+        seg = Segment("clip.mp4", Narration("t", "n.wav", 1.0))
+        monkeypatch.setattr(worker, "_render_segments", lambda *a, **k: ([seg], "hook"))
+        calls = []
+
+        def _fake_compose(segs, hook, work_dir, **kw):
+            calls.append(kw)
+            (tmp_path / "f.mp4").write_bytes(b"x")
+            (tmp_path / "p.jpg").write_bytes(b"x")
+            return str(tmp_path / "f.mp4"), str(tmp_path / "p.jpg")
+
+        monkeypatch.setattr(worker, "compose", _fake_compose)
+        monkeypatch.setattr(worker, "get_store", _fake_store({}))
+
+        worker.render_item(db, item.id, notify=lambda m: None)
+
+        db.refresh(item)
+        assert item.status == "in_review", f"{fmt} render failed: {item.render_error}"
+        assert calls[0]["music_track"] is not None, f"{fmt} got no music track"
+        assert calls[0]["music_track"].endswith(expected), (
+            f"{fmt} should draw from its own configured list, got {calls[0]['music_track']}"
+        )
+        assert calls[0]["music_lufs"] == -33.0

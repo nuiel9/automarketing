@@ -68,5 +68,8 @@ breaking renders that used to work.
 
 ## Licensing
 
-All tracks are CC0 / public domain (FreePD). No attribution is required and
-no rights clearance is needed for commercial social posting.
+AIVDO's catalogue reports every track as `CC0 / Public Domain (FreePD)` in the
+`license` field of `/api/music/tracks`. That is the upstream claim, taken at
+face value here and not independently verified against FreePD — if music
+rights ever need to hold up to scrutiny (a paid campaign, a platform dispute),
+confirm each track at freepd.com first rather than relying on this file.
