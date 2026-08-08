@@ -1,3 +1,5 @@
+import time
+
 import httpx
 import pytest
 import respx
@@ -80,6 +82,48 @@ def test_rate_limit_then_success():
 
 
 @respx.mock
+def test_read_timeout_is_not_retried_and_raises_immediately():
+    """A ReadTimeout can fire AFTER the POST was fully sent, so AIVDO may
+    already have created a job and deducted 5 credits before the response
+    was lost. Retrying here risks double-dispatch with no job id ever
+    persisted -- unrecoverable -- so this must raise after exactly one
+    attempt, never retry."""
+    route = respx.post(f"{BASE}/api/ads/generate").mock(
+        side_effect=httpx.ReadTimeout("timed out"))
+
+    with pytest.raises(AivdoError):
+        generate_ad("data:image/png;base64,AAA", "brief", COPY, None)
+    assert route.call_count == 1
+
+
+@respx.mock
+def test_connect_error_is_retried():
+    """ConnectError fires before the request reaches AIVDO -- nothing was
+    dispatched and nothing was charged, so retrying is safe."""
+    respx.post(f"{BASE}/api/ads/generate").mock(side_effect=[
+        httpx.ConnectError("connection refused"),
+        httpx.Response(200, json={"job_id": "ok2", "credits_used": 5,
+                                  "credits_remaining": 100}),
+    ])
+
+    assert generate_ad("data:image/png;base64,AAA", "brief", COPY, None) == "ok2"
+
+
+@respx.mock
+def test_other_5xx_is_not_retried():
+    """503 is AIVDO's "could not queue; credits refunded" path, so it
+    retries. Any other 5xx has no such contract -- the job may already exist
+    and 5 credits may already be spent, so retrying risks a second dispatch
+    with no job id ever persisted. Exactly one attempt."""
+    route = respx.post(f"{BASE}/api/ads/generate").mock(
+        return_value=httpx.Response(500, json={"detail": "boom"}))
+
+    with pytest.raises(AivdoError):
+        generate_ad("data:image/png;base64,AAA", "brief", COPY, None)
+    assert route.call_count == 1
+
+
+@respx.mock
 def test_poll_returns_the_output_url_once_completed():
     respx.get(f"{BASE}/api/jobs/j1").mock(side_effect=[
         httpx.Response(200, json={"status": "queued", "output_url": None}),
@@ -114,6 +158,39 @@ def test_poll_timeout_reports_the_last_status():
     with pytest.raises(AivdoError) as exc:
         poll("j3", timeout=0, interval=0)
     assert "queued" in str(exc.value)
+
+
+@respx.mock
+def test_poll_survives_a_transient_network_error():
+    """A lost response to a status-poll GET must not lose a job whose 5
+    credits are already spent -- poll must keep trying, not raise. Deleting
+    the except-httpx.HTTPError block in poll leaves this failing."""
+    respx.get(f"{BASE}/api/jobs/j4").mock(side_effect=[
+        httpx.ReadTimeout("timed out"),
+        httpx.Response(200, json={"status": "completed",
+                                  "output_url": "https://storage.googleapis.com/y.mp4"}),
+    ])
+
+    assert poll("j4", timeout=30, interval=0) == "https://storage.googleapis.com/y.mp4"
+
+
+@respx.mock
+def test_poll_timeout_elapses_across_multiple_iterations():
+    """timeout=0 alone doesn't prove the deadline math: a buggy
+    `deadline = timeout` (instead of `time.monotonic() + timeout`) also
+    raises on the very first check, so it passes test_poll_timeout_reports_
+    the_last_status too. Use a real, small, nonzero timeout and measure wall
+    clock: a correct deadline must let real time elapse before raising; the
+    buggy version raises near-instantly regardless of timeout's value."""
+    route = respx.get(f"{BASE}/api/jobs/j5").mock(
+        return_value=httpx.Response(200, json={"status": "queued",
+                                               "current_stage": "Queued"}))
+
+    start = time.monotonic()
+    with pytest.raises(AivdoError):
+        poll("j5", timeout=0.05, interval=0)
+    assert time.monotonic() - start >= 0.04
+    assert route.call_count > 1
 
 
 @respx.mock

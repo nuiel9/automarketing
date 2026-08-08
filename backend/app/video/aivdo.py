@@ -63,7 +63,20 @@ def generate_ad(photo_data_uri: str, brief: str, copy: dict,
     if track_id:
         payload["music_track"] = track_id
 
-    last: httpx.Response | None = None
+    # Retrying dispatch is only safe when we can be confident AIVDO never
+    # processed the request. ConnectError/ConnectTimeout fire before the POST
+    # reaches the server, so nothing was created and nothing was charged.
+    # 429 (rate limit) and 503 are also safe: AIVDO returns 503 specifically
+    # from its "could not queue ads job; credits refunded" path. Anything
+    # else -- notably ReadTimeout, and any 5xx other than 503 -- can happen
+    # AFTER the POST was fully sent, meaning AIVDO may already have created
+    # the job and deducted 5 credits before we lost the response. Retrying
+    # those risks double (or quadruple) dispatch with no job id ever
+    # persisted, which is unrecoverable -- so those raise immediately
+    # instead of retrying. This deliberately narrows the naive "5xx ->
+    # retry" rule to 503 only.
+    _RETRYABLE_STATUS = {429, 503}
+
     for attempt in range(4):
         try:
             resp = httpx.post(
@@ -72,12 +85,21 @@ def generate_ad(photo_data_uri: str, brief: str, copy: dict,
                 headers={"X-API-Key": settings.aivdo_api_key},
                 timeout=120,
             )
-        except httpx.HTTPError as exc:
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
             if attempt == 3:
                 raise AivdoError(f"could not reach AIVDO: {exc}") from exc
             time.sleep(2 ** attempt)
             continue
-        last = resp
+        except httpx.HTTPError as exc:
+            # e.g. ReadTimeout, WriteError, RemoteProtocolError: the request
+            # may have been fully sent, so a job may already exist and
+            # credits may already be spent. Do not retry -- surface it so an
+            # operator can check AIVDO before running this again.
+            raise AivdoError(
+                f"AIVDO dispatch request failed after it may have reached "
+                f"the server -- a job may already exist and 5 credits may "
+                f"already be spent; check AIVDO before retrying: {exc}"
+            ) from exc
         if resp.status_code == 200:
             body = resp.json()
             # The only visibility we get into the budget.
@@ -89,13 +111,20 @@ def generate_ad(photo_data_uri: str, brief: str, copy: dict,
         if resp.status_code == 400:
             # AIVDO moderates BEFORE deducting, so this costs nothing.
             raise ModerationError(f"AIVDO rejected the ad copy: {_detail(resp)}")
-        # 429 (the endpoint allows 5/minute) and 5xx are worth another try.
-        if resp.status_code == 429 or resp.status_code >= 500:
+        if resp.status_code in _RETRYABLE_STATUS:
             if attempt < 3:
                 time.sleep(2 ** attempt)
                 continue
+            raise AivdoError(
+                f"AIVDO returned {resp.status_code} after retries: {_detail(resp)}")
+        if resp.status_code >= 500:
+            # Unlike 503, other 5xx codes have no known refund contract --
+            # we don't know whether the job was created and credits spent.
+            raise AivdoError(
+                f"AIVDO returned {resp.status_code}; a job may already exist "
+                f"and credits may already be spent; check AIVDO before "
+                f"retrying: {_detail(resp)}")
         raise AivdoError(f"AIVDO returned {resp.status_code}: {_detail(resp)}")
-    raise AivdoError(f"AIVDO returned {last.status_code if last else 'no response'}")
 
 
 def poll(job_id: str, timeout: int, interval: float = 10.0) -> str:
