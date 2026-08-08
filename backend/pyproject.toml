@@ -18,6 +18,12 @@ dependencies = [
   "google-cloud-run>=0.10",
   "python-multipart>=0.0.9",
   "playwright>=1.62,<2",
+  # Thai word segmentation. Neither renderer can find Thai word
+  # boundaries on its own: libass has no segmentation at all, and
+  # Chromium only segments when its ICU build ships Thai break data
+  # (the render image's does not -- the same tips card wrapped
+  # correctly on macOS and split a word in half in production).
+  "pythainlp>=5.0",
 ]
 
 [project.optional-dependencies]

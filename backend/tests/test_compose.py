@@ -250,17 +250,41 @@ def test_hook_overlay_skipped_when_no_thai_font_available():
     # The render image's fonts-noto-core install has NotoSansThai; a local
     # machine without any Thai font must not crash the whole compose over a
     # missing drawtext font file.
-    assert _hook_overlay(font=None, hook="ทดสอบ") == ""
+    assert _hook_overlay(font=None, hook="ทดสอบ", work_dir="/nonexistent") == ""
 
 
 def test_hook_overlay_skipped_when_hook_is_empty():
-    assert _hook_overlay(font="/some/font.ttf", hook="") == ""
+    assert _hook_overlay(font="/some/font.ttf", hook="", work_dir="/nonexistent") == ""
 
 
-def test_hook_overlay_uses_resolved_font_path():
-    frag = _hook_overlay(font="/some/font.ttf", hook="ทดสอบ")
+def test_hook_overlay_uses_resolved_font_path(tmp_path):
+    frag = _hook_overlay(font="/some/font.ttf", hook="ทดสอบ", work_dir=str(tmp_path))
     assert "drawtext=fontfile=/some/font.ttf" in frag
-    assert "text='ทดสอบ'" in frag
+    # The hook now goes through textfile= rather than text=: drawtext cannot
+    # wrap, and a newline inside a filter-graph string terminates the option.
+    assert f"textfile={tmp_path}/hook.txt" in frag
+    assert (tmp_path / "hook.txt").read_text(encoding="utf-8") == "ทดสอบ"
+
+
+def test_hook_overlay_wraps_a_long_hook_and_never_starts_off_screen(tmp_path):
+    """A long Thai hook must be wrapped, not centred off the frame.
+
+    drawtext cannot wrap. A shipped tips video carried a 44-character hook at
+    fontsize 64 -- roughly 1500px against a 1080px frame -- so `(w-text_w)/2`
+    evaluated negative and the headline ran off both edges with its opening
+    characters cut away.
+    """
+    hook = "ท่องศัพท์เท่าไหร่ก็ลืม ลองเปลี่ยนมาจำแบบนี้ดู"
+    frag = _hook_overlay(font="/some/font.ttf", hook=hook, work_dir=str(tmp_path))
+
+    lines = (tmp_path / "hook.txt").read_text(encoding="utf-8").split("\n")
+    assert len(lines) > 1, "a 44-character hook must wrap onto multiple lines"
+    for line in lines:
+        assert len(_thai_clusters(line)) <= compose_mod._HOOK_CHARS_PER_LINE
+    # Nothing may be dropped by wrapping.
+    assert "".join(lines).replace(" ", "") == hook.replace(" ", "")
+    # And the x expression itself cannot resolve negative.
+    assert "x=max(0" in frag
 
 
 def test_font_family_derives_noto_sans_thai_from_the_render_image_filename():

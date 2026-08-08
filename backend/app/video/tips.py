@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from app.config import get_settings
 from app.strategy import Strategy
+from app.video.thai import with_break_hints
 from app.video.compose import Segment
 from app.video.ffmpeg import run
 from app.video.tts import synthesize
@@ -116,9 +117,20 @@ def _card_html(card: TipCard, index: int) -> str:
     # in Cloud Run where the metadata server is reachable, so script
     # execution in this context is a credential-exfiltration surface, not a
     # cosmetic bug.
+    # with_break_hints BEFORE escaping: it inserts zero-width spaces, which
+    # html.escape passes through untouched, whereas hinting escaped text
+    # could plant a ZWSP inside an entity like `&amp;`.
+    #
+    # The hints are load-bearing, not cosmetic. Chromium segments Thai
+    # correctly on a dev macOS build but NOT in the render image -- the same
+    # card that wrapped as `...เป็นกลุ่ม / คำ ความหมาย` locally shipped as
+    # `...เป็นก / ลุ่มคำ ความ` in production, splitting `กลุ่ม` in half. With
+    # explicit break opportunities the browser can only break where Thai
+    # words actually end, in any environment.
     return _CARD_HTML.format(
         w=CARD_W, h=CARD_H, index=f"{index:02d}",
-        headline=html.escape(card.headline), body=html.escape(card.body),
+        headline=html.escape(with_break_hints(card.headline)),
+        body=html.escape(with_break_hints(card.body)),
     )
 
 

@@ -5,6 +5,7 @@ import subprocess
 from dataclasses import dataclass
 from functools import lru_cache
 
+from app.video import thai
 from app.video.ffmpeg import blip_command, fit_filter, probe_duration, run, srt_from_segments
 from app.video.music import make_bed
 from app.video.tts import Narration
@@ -91,6 +92,13 @@ _THAI_COMBINING = frozenset(
 # than exact.
 _WRAP_CHARS_PER_LINE = 24
 
+# Hook budget. The hook is drawn larger than a subtitle (fontsize 64 vs 60) and
+# carries a 24px box border on each side, so fewer clusters fit per line. Set
+# below the subtitle budget rather than derived from it, because the failure it
+# guards against -- text running off both edges of the frame -- is far worse
+# than an extra line break.
+_HOOK_CHARS_PER_LINE = 20
+
 
 def _thai_clusters(text: str) -> list[str]:
     """Split text into user-visible clusters -- a base character plus any
@@ -121,47 +129,51 @@ def _wrap_subtitle_text(text: str, max_chars: int = _WRAP_CHARS_PER_LINE) -> str
     The only thing that reliably stacked multiple lines within the frame was
     an actual line break in the SRT cue (ffmpeg's SRT->ASS conversion maps
     each source line to a hard "\\N", which libass always honors). So this
-    wraps the text itself, upstream of libass, using a plain greedy
-    word-wrap over Thai grapheme clusters (see _thai_clusters): break at the
-    last space within budget if there is one, else hard-break at the
-    cluster boundary.
+    wraps the text itself, upstream of libass.
+
+    The wrapping itself is delegated to app.video.thai, which segments Thai
+    into real words. The greedy cluster counter that used to live here had no
+    notion of word boundaries, so it split `กลุ่มคำ` mid-word and stranded the
+    repetition mark `ๆ` alone on a third line in a shipped demo.
     """
     if not text:
         return text
-    lines: list[str] = []
-    line: list[str] = []
-    last_space_idx: int | None = None
-    for cluster in _thai_clusters(text):
-        line.append(cluster)
-        if cluster == " ":
-            last_space_idx = len(line) - 1
-        if len(line) >= max_chars:
-            if last_space_idx is not None:
-                lines.append("".join(line[:last_space_idx]).strip())
-                line = line[last_space_idx + 1:]
-            else:
-                lines.append("".join(line))
-                line = []
-            last_space_idx = None
-    if line:
-        lines.append("".join(line).strip())
-    return "\n".join(l for l in lines if l)
+    return "\n".join(thai.wrap(text, max_chars))
 
 
-def _hook_overlay(font: str | None, hook: str) -> str:
+def _hook_overlay(font: str | None, hook: str, work_dir: str) -> str:
     """Build the drawtext filter fragment for the hook overlay, or "".
 
     No Thai font found (e.g. local macOS dev without fonts-noto-core, the
     package the render image installs) means "" — the render proceeds
     without a hook overlay rather than failing the whole compose over a
     missing font file.
+
+    The hook MUST be wrapped before it reaches drawtext, which cannot wrap
+    text itself. A shipped tips video proves why: a 44-character Thai hook at
+    fontsize 64 measures ~1500px against a 1080px frame, so the centring
+    expression `(w-text_w)/2` evaluated NEGATIVE and the headline ran off
+    both edges with its first characters cut away. Wrapping keeps every line
+    inside the frame; max(0,...) is a belt-and-braces clamp so an
+    unexpectedly wide line can still never start off-screen.
+
+    The wrapped text goes through `textfile=` rather than `text=` because a
+    newline inside a filter-graph string terminates the option — verified:
+    `text='a\\nb'` fails with "Either text, a valid file, a timecode or text
+    source must be provided". The path must be ABSOLUTE, since ffmpeg
+    resolves a relative one against its own cwd, not work_dir.
     """
     if not hook or not font:
         return ""
     safe = hook.replace("'", "").replace(":", " ")
+    lines = thai.wrap(safe, _HOOK_CHARS_PER_LINE) or [safe]
+    path = os.path.abspath(os.path.join(work_dir, "hook.txt"))
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
     return (
-        f",drawtext=fontfile={font}:text='{safe}':fontcolor=white:fontsize=64:"
-        f"box=1:boxcolor=black@0.55:boxborderw=24:x=(w-text_w)/2:y=220:"
+        f",drawtext=fontfile={font}:textfile={path}:fontcolor=white:fontsize=64:"
+        f"line_spacing=12:box=1:boxcolor=black@0.55:boxborderw=24:"
+        f"x=max(0\\,(w-text_w)/2):y=220:"
         f"enable='lt(t,{HOOK_SECONDS})'"
     )
 
@@ -301,7 +313,7 @@ def compose(
         sub_filter += f":force_style='{subtitle_style}'"
         vf_parts.append(sub_filter)
 
-    hook_frag = _hook_overlay(font, hook)
+    hook_frag = _hook_overlay(font, hook, work_dir)
     if hook_frag:
         vf_parts.append(hook_frag.lstrip(","))
     vf = ",".join(vf_parts)
