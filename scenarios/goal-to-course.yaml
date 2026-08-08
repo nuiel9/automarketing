@@ -32,8 +32,18 @@ steps:
     sound: click
     timeout_ms: 30000
 
-  - narration: "ระบบสร้างคอร์สให้ทั้งคอร์ส พร้อมพี่กวี ติวเตอร์เสียงไทยที่คุยกับคุณได้จริง"
+  # Verified from a real render's failure screenshot (2026-08-08): submitting a
+  # goal produces Kavee's personal reply plus a numbered learning plan — NOT a
+  # course link. Courses are created per step afterwards, so waiting on
+  # a[href*='/courses/'] here times out even though the demo worked.
+  - narration: "พี่กวีทักกลับทันที พร้อมวางแผนการเรียนให้เป็นขั้นๆ"
     action: wait_for
-    selector: "a[href*='/courses/']"
+    selector: "button:has-text('สร้างคอร์สขั้นนี้')"
     fit: speedup
     timeout_ms: 180000
+
+  - narration: "เลือกขั้นที่อยากเริ่ม แล้วลงมือเรียนได้เลย"
+    action: scroll
+    selector: "button:has-text('สร้างคอร์สขั้นนี้')"
+    fit: hold
+    timeout_ms: 30000
