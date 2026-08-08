@@ -458,8 +458,13 @@ def _stub_motion_ad(monkeypatch, tmp_path, *, generate, poll=None):
     from app.strategy import MusicConfig, Strategy
     from app.video.ad_copy import AdCopy
 
+    # vo_script deliberately exceeds its 160-char cap (_CAPS in ad_copy.py):
+    # as_payload() and model_dump() must differ, or an assertion comparing
+    # generate_ad's payload against as_payload() can't tell the capped
+    # (gate-checked) text from the raw fields -- every field being short
+    # made that comparison a no-op before this change.
     copy = AdCopy(kicker="k", name="Eduverse One", tagline="t", hl1="a",
-                  hl2="b", promo="p", cta="c", vo_script="v")
+                  hl2="b", promo="p", cta="c", vo_script="v" * 170)
     # A real Strategy, not a real strategy.yaml: unlike production/Docker,
     # local test runs have no "./strategy.yaml" reachable from backend/'s
     # cwd (every other module that needs one -- test_items_api.py,
@@ -508,13 +513,33 @@ def test_job_id_is_persisted_before_polling(db, tmp_path, monkeypatch):
 
     If we only saved the id after a successful poll, a crash mid-poll would
     lose it -- and the retry would generate a second ad and pay again.
+
+    This must observe ORDERING directly, not infer it from what a query can
+    see. `db` here is the very same Session `_render_motion_ad` writes
+    through, and SQLAlchemy's default `expire_on_commit=True` only expires
+    attributes on ITS OWN commit -- it does not stop the identity map from
+    handing back a pending in-memory value to `db.get(...)` regardless of
+    whether a commit happened first. So a `db.get()` read from inside the
+    poll stub would return "job-2" even if the interim `session.commit()`
+    were deleted entirely and only the trailing `finally: session.commit()`
+    ran -- proving nothing. Wrapping `commit` and `poll` to append to a
+    shared, ordered event log is what actually distinguishes "committed,
+    then polled" from "polled, then committed at the end".
     """
     item = _motion_item(db)
-    seen = {}
+    events = []
+    real_commit = db.commit
+
+    def _tracked_commit():
+        # Captured at call time, not after: item.aivdo_job_id already holds
+        # whatever the worker assigned to it before calling commit().
+        events.append(f"commit:{item.aivdo_job_id}")
+        real_commit()
+
+    monkeypatch.setattr(db, "commit", _tracked_commit)
 
     def _poll(job_id, timeout):
-        fresh = db.get(ContentItem, item.id)
-        seen["persisted"] = fresh.aivdo_job_id
+        events.append(f"poll:{job_id}")
         return "https://x/y.mp4"
 
     _stub_motion_ad(monkeypatch, tmp_path,
@@ -522,7 +547,10 @@ def test_job_id_is_persisted_before_polling(db, tmp_path, monkeypatch):
 
     worker.render_item(db, item.id, notify=lambda m: None)
 
-    assert seen["persisted"] == "job-2", "job id must be committed before polling"
+    assert "commit:job-2" in events, "the new job id must be committed at some point"
+    assert events.index("commit:job-2") < events.index("poll:job-2"), (
+        f"job id must be committed before polling, got order: {events}"
+    )
 
 
 def test_retry_resumes_an_existing_job_instead_of_paying_again(db, tmp_path, monkeypatch):
