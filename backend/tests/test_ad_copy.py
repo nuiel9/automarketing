@@ -66,6 +66,27 @@ def test_banned_words_raise_before_any_credit_is_spent(monkeypatch):
     assert "รับประกันสอบติด" in exc.value.words
 
 
+def test_banned_word_past_the_cap_does_not_raise(monkeypatch):
+    """Complement of test_banned_words_raise_before_any_credit_is_spent: a
+    banned word placed entirely past the 120-char cap never renders, so the
+    gate -- checked against the CAPPED payload -- must let it through.
+
+    This is the test that actually discriminates "gate on capped text" from
+    "gate on raw text": the banned word here sits outside the clean 120-char
+    prefix, so gating on raw fields (the bug this task guards against) would
+    raise here, while gating on the capped payload (the correct behaviour)
+    must not.
+    """
+    banned = STRATEGY.banned_words[0]
+    clean_prefix = "ก" * 120
+    hidden = GOOD.model_copy(update={"promo": clean_prefix + banned})
+    _stub_model(monkeypatch, hidden)
+
+    copy = write_ad_copy("เทคนิคจำศัพท์", STRATEGY)
+    assert copy.as_payload()["promo"] == clean_prefix
+    assert banned not in copy.as_payload()["promo"]
+
+
 def test_model_returning_nothing_raises(monkeypatch):
     import app.video.ad_copy as mod
 
