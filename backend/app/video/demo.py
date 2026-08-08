@@ -29,7 +29,18 @@ def _do_step(page, step: Step, base_url: str) -> None:
     elif step.action == "wait_ms":
         page.wait_for_timeout(step.ms or 0)
     elif step.action == "scroll":
-        page.locator(step.selector).scroll_into_view_if_needed(timeout=step.timeout_ms)
+        # `.last`, and never a bare locator. Locator is STRICT (unlike the
+        # page.click/page.fill calls above, which take the first DOM match),
+        # so a selector matching a repeated element raises "strict mode
+        # violation" instead of scrolling -- and a repeated element is the
+        # normal case for a scroll step: you scroll to reveal a LIST. A real
+        # render died here on a 4-item plan whose cards all carried the same
+        # button label.
+        # `.last` over `.first` because scrolling to the end of the list is
+        # what reveals it; the first match is usually already on screen, so
+        # the step would be a no-op and the shot would never move. With a
+        # single match the two are identical.
+        page.locator(step.selector).last.scroll_into_view_if_needed(timeout=step.timeout_ms)
 
 
 def render_demo(

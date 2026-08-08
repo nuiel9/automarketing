@@ -198,3 +198,33 @@ def test_goals_page_selector_works_in_both_states(tmp_path, monkeypatch, html):
     scenario = Scenario(name="fx", login=False, steps=[open_step, type_step])
     segments = render_demo(scenario, str(tmp_path), base_url=f"file://{page}", login=None)
     assert len(segments) == 2
+
+
+@pytest.mark.slow
+def test_scroll_step_tolerates_repeated_elements(tmp_path, monkeypatch):
+    """A scroll step must not trip Playwright's strict mode.
+
+    page.click()/page.fill() take the first DOM match, but Locator is strict,
+    so `page.locator(sel).scroll_into_view_if_needed()` raises on a selector
+    that matches more than one element. That is the normal case for a scroll
+    step -- you scroll to reveal a list -- and it killed a real render whose
+    goal plan had four identically-labelled buttons.
+    """
+    import app.video.demo as demo
+
+    monkeypatch.setattr(demo, "synthesize", _fake_synth(tmp_path))
+
+    cards = "".join(
+        f"<div style='height:900px'><button>สร้างคอร์สขั้นนี้ {i}</button></div>"
+        for i in range(4)
+    )
+    page = tmp_path / "plan.html"
+    page.write_text(f"<!doctype html><meta charset=utf-8><body>{cards}</body>",
+                    encoding="utf-8")
+
+    scenario = Scenario(name="fx", login=False, steps=[
+        Step(narration="เลื่อนดูแผน", action="scroll",
+             selector="button:has-text('สร้างคอร์สขั้นนี้')", timeout_ms=5000),
+    ])
+    segments = render_demo(scenario, str(tmp_path), base_url=f"file://{page}", login=None)
+    assert len(segments) == 1
