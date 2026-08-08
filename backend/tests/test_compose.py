@@ -313,3 +313,25 @@ def test_thai_font_falls_through_to_none_when_nothing_resolves(monkeypatch, tmp_
         assert compose_mod._thai_font() is None
     finally:
         compose_mod._thai_font.cache_clear()
+
+
+@pytest.mark.slow
+def test_output_audio_is_48khz_not_loudnorm_192k(tmp_path):
+    """loudnorm resamples to 192kHz and emits at that rate; AAC then clamps
+    to its own 96kHz ceiling. Without an explicit -ar the factory ships
+    96kHz audio built from a 24kHz TTS source -- off the standard rates
+    platforms expect, for zero added information.
+    """
+    segs = [Segment(
+        clip_path=_make_clip(str(tmp_path / "c.mp4"), 2.0),
+        narration=_make_narration(str(tmp_path / "c.wav"), 1.5, "ทดสอบเสียง"),
+        fit="speedup", sound=None,
+    )]
+    mp4, _ = compose(segs, hook=None, work_dir=str(tmp_path), subtitles=False)
+
+    rate = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "a:0",
+         "-show_entries", "stream=sample_rate", "-of", "csv=p=0", mp4],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert rate == "48000", f"expected 48000 Hz audio, got {rate} Hz"

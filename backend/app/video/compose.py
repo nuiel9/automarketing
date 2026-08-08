@@ -309,8 +309,13 @@ def compose(
         cmd += ["-af", "loudnorm", "-map", "0:v", "-map", "1:a"]
     if vf:
         cmd += ["-vf", vf]
+    # -ar is NOT optional here. The loudnorm filter above resamples to 192kHz
+    # internally and emits at that rate; the AAC encoder then clamps to its
+    # own 96kHz ceiling. Without this the factory ships 96kHz audio built from
+    # a 24kHz TTS source -- four times the data for zero added information,
+    # off the standard rates social platforms expect. 48kHz is the norm.
     cmd += ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
-            "-shortest", mp4]
+            "-ar", "48000", "-shortest", mp4]
     run(cmd)
 
     poster = os.path.join(work_dir, "poster.jpg")
