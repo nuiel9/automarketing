@@ -8,9 +8,10 @@ from app.media import get_store
 from app.models import ContentItem
 from app.notify import line_notify
 from app.state import transition
-from app.strategy import load_strategy
+from app.strategy import MusicConfig, load_strategy
 from app.video.compose import compose
 from app.video.demo import RenderStepError, render_demo
+from app.video.music import pick_track
 from app.video.scenario import ScenarioError, load_scenario
 from app.video.tips import render_tips, write_tips
 
@@ -63,6 +64,29 @@ def _upload_screenshot(path: str | None) -> str | None:
         return None
 
 
+def _music_for(item: ContentItem) -> tuple[str | None, float]:
+    """(track path, gain) for this item, or (None, default) if unavailable.
+
+    Every failure here degrades to "this video has no music" instead of
+    propagating. Music is a polish layer: a malformed strategy.yaml or a
+    track missing from the image must not be able to fail a render that
+    would otherwise have produced a perfectly good video -- and note that
+    before music existed, a demo render did not read strategy.yaml at all,
+    so raising here would newly break renders that used to work.
+    """
+    default_gain = MusicConfig().gain_lufs
+    try:
+        strategy = load_strategy(get_settings().strategy_path)
+        # Keyed on the item id so a re-render after a fix keeps the same
+        # track instead of swapping the soundtrack under a reviewer who
+        # already approved how it sounded.
+        return pick_track(strategy.music.for_format(item.format), item.id), strategy.music.gain_lufs
+    except Exception:
+        log.warning("music unavailable for item %s; rendering without a bed",
+                    item.id, exc_info=True)
+        return None, default_gain
+
+
 def render_item(session, item_id: str, notify=line_notify) -> None:
     item = session.get(ContentItem, item_id)
     if item is None:
@@ -76,7 +100,11 @@ def render_item(session, item_id: str, notify=line_notify) -> None:
             # redundant and collides with that text (two layers of Thai
             # fighting each other). A demo screen-recording has no text of
             # its own, so burned subtitles are essential there.
-            mp4, poster = compose(segments, hook, work_dir, subtitles=item.format == "demo")
+            track, gain = _music_for(item)
+            mp4, poster = compose(
+                segments, hook, work_dir, subtitles=item.format == "demo",
+                music_track=track, music_lufs=gain,
+            )
             store = get_store(get_settings())
             with open(mp4, "rb") as f:
                 video_ref = store.save(f, "video.mp4")

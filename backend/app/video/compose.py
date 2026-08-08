@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 
 from app.video.ffmpeg import blip_command, fit_filter, probe_duration, run, srt_from_segments
+from app.video.music import make_bed
 from app.video.tts import Narration
 
 WIDTH, HEIGHT = 1080, 1920
@@ -220,7 +221,8 @@ def _sound_track(segments: list[Segment], work_dir: str, total: float) -> str | 
 
 
 def compose(
-    segments: list[Segment], hook: str, work_dir: str, subtitles: bool = True
+    segments: list[Segment], hook: str, work_dir: str, subtitles: bool = True,
+    music_track: str | None = None, music_lufs: float = -33.0,
 ) -> tuple[str, str]:
     os.makedirs(work_dir, exist_ok=True)
 
@@ -238,6 +240,10 @@ def compose(
 
     total = sum(s.narration.seconds for s in segments)
     blips = _sound_track(segments, work_dir, total)
+    # The bed is built here, not by the caller, because `total` is this
+    # function's own notion of the finished timeline -- a caller computing
+    # it independently would drift the moment clip fitting changes.
+    bed = make_bed(music_track, total, work_dir, music_lufs) if music_track else None
 
     # The hook overlay is independent of the `subtitles` flag (see worker.py:
     # a tips card's on-screen hook headline is drawn by this same drawtext,
@@ -302,9 +308,21 @@ def compose(
 
     mp4 = os.path.join(work_dir, "final.mp4")
     cmd = ["ffmpeg", "-y", "-i", video, "-i", voice]
-    if blips:
-        cmd += ["-i", blips, "-filter_complex",
-                "[1:a][2:a]amix=inputs=2:normalize=0,loudnorm[a]", "-map", "0:v", "-map", "[a]"]
+    # Input 0 is the video and input 1 the narration; each extra audio bed
+    # (UI blips, music) appends another input, so the amix label list is built
+    # from the count rather than hard-coded -- a fixed "[1:a][2:a]" silently
+    # drops whichever bed lands at index 3.
+    extra = [p for p in (blips, bed) if p]
+    if extra:
+        for path in extra:
+            cmd += ["-i", path]
+        n = 1 + len(extra)
+        labels = "".join(f"[{i}:a]" for i in range(1, n + 1))
+        # normalize=0 keeps amix from rescaling by input count, which is what
+        # preserves the deliberate level gap between the -33 LUFS bed and the
+        # narration; the trailing loudnorm lifts the whole mix to spec.
+        cmd += ["-filter_complex", f"{labels}amix=inputs={n}:normalize=0,loudnorm[a]",
+                "-map", "0:v", "-map", "[a]"]
     else:
         cmd += ["-af", "loudnorm", "-map", "0:v", "-map", "1:a"]
     if vf:

@@ -60,7 +60,11 @@ def test_compose_called_with_subtitles_true_for_demo_format(db, tmp_path, monkey
 
     worker.render_item(db, item.id, notify=lambda m: None)
 
-    assert calls == [{"subtitles": True}]
+    # Assert the one flag this test is about, not the whole kwargs dict --
+    # an exact-dict match fails whenever compose() gains an unrelated
+    # argument (it did, when music was added), which says nothing about
+    # subtitles.
+    assert [c["subtitles"] for c in calls] == [True]
 
 
 def test_compose_called_with_subtitles_false_for_tips_format(db, tmp_path, monkeypatch):
@@ -84,7 +88,7 @@ def test_compose_called_with_subtitles_false_for_tips_format(db, tmp_path, monke
 
     worker.render_item(db, item.id, notify=lambda m: None)
 
-    assert calls == [{"subtitles": False}]
+    assert [c["subtitles"] for c in calls] == [False]
 
 
 def test_poster_upload_failure_leaves_media_path_none_and_marks_failed(db, tmp_path, monkeypatch):
@@ -352,3 +356,37 @@ def test_main_reads_item_id_env_and_delegates(monkeypatch):
     worker.main()
 
     assert calls == ["abc123"]
+
+
+def test_broken_strategy_file_costs_the_music_not_the_render(db, tmp_path, monkeypatch):
+    """A malformed or missing strategy.yaml must not fail a render.
+
+    Before music existed, a demo render never read strategy.yaml at all, so
+    making the render depend on parsing it would newly break renders that
+    used to work. Music is a polish layer -- losing the bed is not worth
+    dropping a finished video on the floor.
+    """
+    item = _item(db)
+    seg = Segment("clip.mp4", Narration("t", "n.wav", 1.0))
+    monkeypatch.setattr(worker, "_render_segments", lambda *a, **k: ([seg], "hook"))
+
+    def _boom(path):
+        raise ValueError("strategy.yaml is not valid yaml")
+
+    monkeypatch.setattr(worker, "load_strategy", _boom)
+    calls = []
+
+    def _fake_compose(segs, hook, work_dir, **kw):
+        calls.append(kw)
+        (tmp_path / "f.mp4").write_bytes(b"x")
+        (tmp_path / "p.jpg").write_bytes(b"x")
+        return str(tmp_path / "f.mp4"), str(tmp_path / "p.jpg")
+
+    monkeypatch.setattr(worker, "compose", _fake_compose)
+    monkeypatch.setattr(worker, "get_store", _fake_store({}))
+
+    worker.render_item(db, item.id, notify=lambda m: None)
+
+    db.refresh(item)
+    assert item.status == "in_review"
+    assert calls[0]["music_track"] is None

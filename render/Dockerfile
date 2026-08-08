@@ -31,6 +31,15 @@ RUN pip install --no-cache-dir .
 COPY backend/app ./app
 COPY scenarios ./scenarios
 COPY strategy.yaml ./strategy.yaml
-ENV STRATEGY_PATH=./strategy.yaml SCENARIO_ROOT=./scenarios PYTHONUNBUFFERED=1
+
+# Bake the CC0 music beds named in strategy.yaml into the image. Done at
+# build time rather than render time so a render never depends on a
+# third-party host being up, and so ~3MB binaries stay out of git. A renamed
+# or missing track fails HERE, loudly, instead of shipping an image that
+# silently renders every video without music.
+COPY render/fetch_music.py ./fetch_music.py
+RUN python fetch_music.py strategy.yaml ./music
+
+ENV STRATEGY_PATH=./strategy.yaml SCENARIO_ROOT=./scenarios MUSIC_ROOT=./music PYTHONUNBUFFERED=1
 
 CMD ["python", "-m", "app.video.worker"]

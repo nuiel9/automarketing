@@ -16,3 +16,26 @@ platform_notes:
   facebook: "พูดกับผู้ปกครองได้ด้วย น้ำเสียงอบอุ่น"
   x: "สั้น กระชับ ไม่เกิน 280 ตัวอักษร"
   line: "ข้อความบรอดแคสต์ สุภาพ มีลิงก์ชัดเจน ไม่สแปม"
+
+# Background-music beds (CC0 / FreePD, via AIVDO's public library — see
+# docs/MUSIC.md). Each format lists several tracks; one is picked per item so
+# the feed doesn't carry identical audio on every post. Track ids must exist
+# in AIVDO's catalogue: GET https://aivdo-api-b7iz53omoq-as.a.run.app/api/music/tracks
+# render/fetch_music.py reads exactly these ids at image-build time, so
+# adding one here is all that's needed — but a typo fails the BUILD, loudly,
+# rather than shipping an image that silently renders without music.
+music:
+  # Tips cards are quick and listy — bright, forward-moving beds suit them.
+  tips:
+    - city-sunshine
+    - funshine
+    - motions
+  # A product walkthrough is calmer and more explanatory; warm/inspiring beds
+  # sit under a Thai voiceover without pulling attention off the screen.
+  demo:
+    - inspiration
+    - emotional-piano
+  # Absolute loudness the bed is normalised to BEFORE mixing under the
+  # narration (AIVDO's Motion Ad value). Moving this toward -24 starts
+  # burying the voiceover.
+  gain_lufs: -33.0
