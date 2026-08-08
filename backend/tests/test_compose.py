@@ -397,3 +397,38 @@ def test_hook_is_capped_so_it_cannot_blanket_the_card(tmp_path):
 def test_hook_of_only_emoji_yields_no_overlay(tmp_path):
     """Stripping must not leave an empty box floating over the video."""
     assert _hook_overlay(font="/some/font.ttf", hook="🔥✨🎯", work_dir=str(tmp_path)) == ""
+
+
+def test_hook_strips_a_leftover_variation_selector(tmp_path):
+    """The category heuristic alone shipped a tofu box.
+
+    `❤️` is `❤` (So) plus U+FE0F VARIATION SELECTOR-16, whose category is
+    **Mn** -- the same category as Thai tone marks, which must be kept. So a
+    category filter aimed at emoji removed the heart and left the selector,
+    which drawtext rendered as exactly one box. Filtering by the font's cmap
+    catches it, along with CJK and the ideographic space.
+    """
+    font = compose_mod._thai_font()
+    if font is None:
+        pytest.skip("no Thai font on this machine to read a cmap from")
+
+    hook = "อยากจำศัพท์ได้แม่น ❤️ ลองดู 漢 นะครับ"
+    _hook_overlay(font=font, hook=hook, work_dir=str(tmp_path))
+    written = (tmp_path / "hook.txt").read_text(encoding="utf-8")
+
+    covered = compose_mod._font_charset(font)
+    assert covered, "expected to read a cmap from the resolved font"
+    for ch in written.replace("\n", ""):
+        assert ord(ch) in covered, f"{ch!r} ({hex(ord(ch))}) has no glyph -> tofu"
+    assert "️" not in written
+    assert "漢" not in written
+    assert "อยากจำศัพท์ได้แม่น" in written
+
+
+def test_unreadable_font_falls_back_instead_of_passing_everything(tmp_path):
+    """An unparseable font must not silently disable filtering."""
+    bogus = tmp_path / "not-a-font.ttf"
+    bogus.write_bytes(b"definitely not a font")
+    assert compose_mod._font_charset(str(bogus)) is None
+    # Falls back to the category heuristic, which still removes the emoji.
+    assert "🔥" not in compose_mod._strip_unrenderable("ทดสอบ 🔥 นะ", str(bogus))

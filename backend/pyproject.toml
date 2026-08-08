@@ -24,6 +24,10 @@ dependencies = [
   # (the render image's does not -- the same tips card wrapped
   # correctly on macOS and split a word in half in production).
   "pythainlp>=5.0",
+  # Reads the hook font's cmap so text drawn with drawtext (which has no
+  # font-fallback chain) can be filtered to what that one font can
+  # actually draw, instead of shipping tofu boxes.
+  "fonttools>=4.50",
 ]
 
 [project.optional-dependencies]
