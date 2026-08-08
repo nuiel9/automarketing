@@ -432,3 +432,48 @@ def test_unreadable_font_falls_back_instead_of_passing_everything(tmp_path):
     assert compose_mod._font_charset(str(bogus)) is None
     # Falls back to the category heuristic, which still removes the emoji.
     assert "🔥" not in compose_mod._strip_unrenderable("ทดสอบ 🔥 นะ", str(bogus))
+
+
+def test_font_selection_prefers_thai_plus_latin_over_thai_only(tmp_path, monkeypatch):
+    """Our copy mixes scripts, and drawtext has no fallback chain.
+
+    Every Noto Thai face in the render image covers Thai ONLY -- 101 cmap
+    entries, no Latin letters, no digits. Selecting one means "Eduverse One",
+    "AI" and every number are either drawn as tofu or, once unrenderable
+    characters are stripped, silently deleted from the hook.
+    """
+    thai_only = tmp_path / "ThaiOnly.ttf"
+    both = tmp_path / "ThaiAndLatin.ttf"
+    for f in (thai_only, both):
+        f.write_bytes(b"stub")
+
+    charsets = {
+        str(thai_only): frozenset({ord("ก")}),
+        str(both): frozenset({ord("ก"), ord("A"), ord("0")}),
+    }
+    monkeypatch.setattr(compose_mod, "_FONT_CANDIDATES", [str(thai_only), str(both)])
+    monkeypatch.setattr(compose_mod, "_MAC_THAI_FONT_CANDIDATES", [])
+    monkeypatch.setattr(compose_mod, "_font_charset", lambda p: charsets.get(p))
+    compose_mod._thai_font.cache_clear()
+
+    try:
+        # Thai-only comes FIRST in the candidate list and must still lose.
+        assert compose_mod._thai_font() == str(both)
+    finally:
+        compose_mod._thai_font.cache_clear()
+
+
+def test_font_selection_falls_back_to_thai_only_when_nothing_better_exists(tmp_path, monkeypatch):
+    """A hook missing its Latin still beats no hook at all."""
+    thai_only = tmp_path / "ThaiOnly.ttf"
+    thai_only.write_bytes(b"stub")
+
+    monkeypatch.setattr(compose_mod, "_FONT_CANDIDATES", [str(thai_only)])
+    monkeypatch.setattr(compose_mod, "_MAC_THAI_FONT_CANDIDATES", [])
+    monkeypatch.setattr(compose_mod, "_font_charset", lambda p: frozenset({ord("ก")}))
+    compose_mod._thai_font.cache_clear()
+
+    try:
+        assert compose_mod._thai_font() == str(thai_only)
+    finally:
+        compose_mod._thai_font.cache_clear()

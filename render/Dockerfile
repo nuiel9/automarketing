@@ -21,8 +21,13 @@
 FROM mcr.microsoft.com/playwright/python:v1.62.0-noble
 
 WORKDIR /app
+# fonts-thai-tlwg supplies Garuda/Waree: Thai sans faces that ALSO carry
+# Latin and digits. Every Noto Thai face here covers Thai ONLY (101 cmap
+# entries), and drawtext has no font-fallback chain -- so a hook containing
+# "Eduverse One", "AI" or any number would lose it. See compose._thai_font.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ffmpeg fonts-noto-core fonts-noto-cjk \
+      fonts-thai-tlwg \
  && rm -rf /var/lib/apt/lists/*
 
 COPY backend/pyproject.toml ./

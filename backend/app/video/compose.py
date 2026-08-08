@@ -21,6 +21,19 @@ WIDTH, HEIGHT = 1080, 1920
 FONT = "/usr/share/fonts/truetype/noto/NotoSansThai-Regular.ttf"
 HOOK_SECONDS = 3
 
+# Ordered by preference for drawtext, which has no font-fallback chain.
+# Garuda/Waree (fonts-thai-tlwg) are Thai sans faces that ALSO carry Latin and
+# digits; the Noto Thai faces in the image do not (101 cmap entries, Thai
+# only). FreeSerif is the last resort: it covers both scripts but is a serif,
+# which sits oddly against the cards' sans -- better than losing the brand
+# name, worse than Garuda.
+_FONT_CANDIDATES = [
+    "/usr/share/fonts/truetype/tlwg/Garuda.ttf",
+    "/usr/share/fonts/truetype/tlwg/Waree.ttf",
+    FONT,
+    "/usr/share/fonts/truetype/freefont/FreeSerif.ttf",
+]
+
 _MAC_THAI_FONT_CANDIDATES = [
     "/System/Library/Fonts/Supplemental/Ayuthaya.ttf",
     "/System/Library/Fonts/Supplemental/Thonburi.ttc",
@@ -30,20 +43,40 @@ _MAC_THAI_FONT_CANDIDATES = [
 
 @lru_cache
 def _thai_font() -> str | None:
-    """Resolve a Thai-capable font file, or None if none is available.
+    """Resolve a font that can draw our copy, or None if none is available.
 
-    The composer must never fail a whole render just because the local
-    machine lacks the render image's font package (fonts-noto-core, Task
-    11) -- the caller (compose()) skips the hook drawtext overlay, and
-    derives the burned subtitle style's FontName from FONT itself instead
-    (see compose()), when this returns None rather than propagating an
-    FFmpegError.
+    "Thai-capable" is not enough. Our copy mixes Thai with Latin and digits --
+    "Eduverse One", "AI", "3 เดือน" -- and drawtext takes ONE fontfile with no
+    fallback chain. Every Noto Thai face in the render image covers Thai ONLY:
+    NotoSansThai-Regular has 101 cmap entries, with no Latin letters and no
+    digits (surveyed inside the image, 2026-08-09). Picking it means the brand
+    name and every number either render as tofu or, once unrenderable
+    characters are stripped, vanish from the hook entirely.
+
+    So prefer a face that covers Thai AND Latin AND digits, and fall back to a
+    Thai-only face only if nothing better exists -- a hook missing its Latin
+    is still better than no hook at all.
+
+    Returning None (no Thai font anywhere, e.g. a bare dev machine) is also
+    supported: compose() then skips the drawtext overlay rather than failing
+    the whole render over a missing font file.
     """
-    if os.path.exists(FONT):
-        return FONT
-    for candidate in _MAC_THAI_FONT_CANDIDATES:
-        if os.path.exists(candidate):
+    thai_only: str | None = None
+    for candidate in _FONT_CANDIDATES + _MAC_THAI_FONT_CANDIDATES:
+        if not os.path.exists(candidate):
+            continue
+        covered = _font_charset(candidate)
+        if covered is None:
+            # Unreadable: fall back to trusting the path, as before.
+            thai_only = thai_only or candidate
+            continue
+        if ord("ก") not in covered:
+            continue
+        if ord("A") in covered and ord("0") in covered:
             return candidate
+        thai_only = thai_only or candidate
+    if thai_only:
+        return thai_only
     if shutil.which("fc-match"):
         try:
             proc = subprocess.run(
