@@ -14,6 +14,7 @@ class MusicConfig(BaseModel):
 
     tips: list[str] = []
     demo: list[str] = []
+    motion_ad: list[str] = []
     # Absolute loudness the bed is normalised to BEFORE it is mixed under the
     # narration. -33 LUFS is AIVDO's Motion Ad value, which is deliberately
     # far below the -24 the final mix is normalised to: the bed is meant to
@@ -22,7 +23,11 @@ class MusicConfig(BaseModel):
     gain_lufs: float = -33.0
 
     def for_format(self, fmt: str) -> list[str]:
-        return {"tips": self.tips, "demo": self.demo}.get(fmt, [])
+        return {
+            "tips": self.tips,
+            "demo": self.demo,
+            "motion_ad": self.motion_ad,
+        }.get(fmt, [])
 
 
 class Strategy(BaseModel):

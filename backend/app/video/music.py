@@ -55,6 +55,26 @@ def pick_track(track_ids: list[str], key: str, root: str = MUSIC_ROOT) -> str | 
     return os.path.join(root, f"{usable[index]}.mp3")
 
 
+def pick_track_id(track_ids: list[str], key: str) -> str | None:
+    """Choose one track ID for `key`, without touching the filesystem.
+
+    Deliberately NOT pick_track. For the motion_ad format we hand a track ID
+    to AIVDO, which renders the bed on its side -- the mp3 never needs to
+    exist locally, and render/fetch_music.py does not download these. Routing
+    this through pick_track would fail its os.path.isfile check, return None,
+    and silently ship every ad with the template's default bed.
+
+    Same deterministic hashing as pick_track, for the same reasons: a
+    re-render keeps the track a reviewer already approved, while different
+    items still spread across the configured list.
+    """
+    usable = [t for t in track_ids if _TRACK_ID.match(t)]
+    if not usable:
+        return None
+    index = int(hashlib.sha256(key.encode()).hexdigest(), 16) % len(usable)
+    return usable[index]
+
+
 def make_bed(track_path: str, seconds: float, work_dir: str,
              lufs: float = -33.0, fade: float = 1.2) -> str:
     """Render `track_path` into a bed exactly `seconds` long.
