@@ -24,11 +24,11 @@ def capture(url: str, out_path: str, side: int = 1080) -> str:
     from playwright.sync_api import Error as PlaywrightError
     from playwright.sync_api import sync_playwright
 
-    os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     # device_scale_factor=2 renders at 2x and downsamples, so page text stays
     # legible after AIVDO scales the photo into its frame.
     half = max(1, side // 2)
     try:
+        os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
         with sync_playwright() as pw:
             browser = pw.chromium.launch(args=["--no-sandbox"])
             context = browser.new_context(
@@ -44,6 +44,8 @@ def capture(url: str, out_path: str, side: int = 1080) -> str:
             browser.close()
     except PlaywrightError as exc:
         raise ShotError(f"could not capture {url}: {exc}") from exc
+    except OSError as exc:
+        raise ShotError(f"could not write screenshot to {out_path}: {exc}") from exc
     return out_path
 
 

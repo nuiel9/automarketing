@@ -48,3 +48,21 @@ def test_to_data_uri_is_a_png_data_uri(tmp_path):
 def test_missing_file_raises_shot_error(tmp_path):
     with pytest.raises(ShotError):
         to_data_uri(str(tmp_path / "nope.png"))
+
+
+@pytest.mark.slow
+def test_invalid_output_directory_raises_shot_error(tmp_path):
+    """Directory creation errors must be caught and converted to ShotError,
+    not leaked as bare OSError.
+    """
+    page = tmp_path / "p.html"
+    page.write_text(FIXTURE, encoding="utf-8")
+    # Use a path with a non-existent parent directory that cannot be created
+    # (e.g., a file as a directory component). This should raise OSError during
+    # makedirs, which must be caught and converted to ShotError.
+    impossible_path = tmp_path / "file_not_dir.txt" / "shot.png"
+    with open(tmp_path / "file_not_dir.txt", "w") as f:
+        f.write("this is a file, not a directory")
+
+    with pytest.raises(ShotError):
+        capture(f"file://{page}", str(impossible_path), side=600)
