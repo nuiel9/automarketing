@@ -145,6 +145,12 @@ credentials. Verified live: `200 video/mp4`. Download it and re-upload through
 our own `MediaStore` so the item's media does not depend on someone else's
 signed URL expiring.
 
+Retrying a dispatch is only safe when the request provably was not
+processed. `httpx.ConnectError`/`ConnectTimeout` prove that; `ReadTimeout`
+does not — the POST was fully sent, so AIVDO may already have deducted 5
+credits and created the job. Retrying those spends credits again AND
+strands jobs whose ids were never persisted.
+
 ## Not spending credits twice
 
 Credits are deducted at dispatch and refunded **only if dispatch itself
@@ -193,7 +199,9 @@ All failures follow the existing path: set `item.render_error`, transition to
 | `400` moderation | Fail with AIVDO's `Content blocked: {category}` detail. No credits spent (AIVDO moderates before deducting). |
 | `402` | Out of credits. Message states how many are needed. Distinct wording so the founder can top up. |
 | `429` | Retry with backoff inside the client (limit is 5/min). |
-| `5xx` / network | Retry with backoff; fail after exhausting attempts. |
+| `503` | Retry — AIVDO returns 503 only from its "could not queue; credits refunded" path, so nothing was spent. |
+| Other `5xx`, or a network error **after** the request was sent | **Do not retry.** Fail saying a job may exist and credits may already be spent. |
+| Connection-phase network error | Retry with backoff — the request never reached the server. |
 | Poll timeout | Fail with elapsed time and the last-seen `status`/`current_stage`. Job id is persisted, so a retry resumes. |
 | Terminal `failed`/`canceled` | Fail with AIVDO's `error` text. |
 
