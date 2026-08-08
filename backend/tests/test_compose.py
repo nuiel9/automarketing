@@ -359,3 +359,41 @@ def test_output_audio_is_48khz_not_loudnorm_192k(tmp_path):
         capture_output=True, text=True, check=True,
     ).stdout.strip()
     assert rate == "48000", f"expected 48000 Hz audio, got {rate} Hz"
+
+
+def test_hook_strips_emoji_the_font_cannot_draw(tmp_path):
+    """drawtext takes ONE fontfile and has no fallback chain.
+
+    A shipped tips video rendered `□□□□□□□` mid-hook where the model had
+    written emoji: the Thai font has no glyphs for them and drawtext cannot
+    fall back to an emoji font, so the codepoints became tofu boxes.
+    """
+    hook = "จำศัพท์เท่าไหร่ก็ลืม 🔥 ลองเปลี่ยนมาทวน ✨🎯 กันครับ"
+    _hook_overlay(font="/some/font.ttf", hook=hook, work_dir=str(tmp_path))
+    written = (tmp_path / "hook.txt").read_text(encoding="utf-8")
+
+    for emoji in ("🔥", "✨", "🎯"):
+        assert emoji not in written
+    assert "จำศัพท์เท่าไหร่ก็ลืม" in written
+    assert "  " not in written, "removing emoji must not leave double spaces"
+
+
+def test_hook_is_capped_so_it_cannot_blanket_the_card(tmp_path):
+    """drawtext paints an opaque box behind the text.
+
+    Once wrapping was added, a long hook stopped overflowing the frame and
+    started covering the tips card instead -- a 4-line hook hid the card's
+    number and headline. Two lines is a hook; more is a caption.
+    """
+    hook = ("จำศัพท์เท่าไหร่ก็ลืม ลองเปลี่ยนมาทวนด้วยเทคนิคนี้ "
+            "แล้วคุณจะจำได้นานขึ้นกว่าเดิมมากเลยครับ")
+    _hook_overlay(font="/some/font.ttf", hook=hook, work_dir=str(tmp_path))
+    lines = (tmp_path / "hook.txt").read_text(encoding="utf-8").split("\n")
+
+    assert len(lines) <= compose_mod._HOOK_MAX_LINES
+    assert lines[-1].endswith("…"), "a truncated hook must show it was cut"
+
+
+def test_hook_of_only_emoji_yields_no_overlay(tmp_path):
+    """Stripping must not leave an empty box floating over the video."""
+    assert _hook_overlay(font="/some/font.ttf", hook="🔥✨🎯", work_dir=str(tmp_path)) == ""

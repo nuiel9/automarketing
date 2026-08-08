@@ -2,6 +2,7 @@ import os
 import re
 import shutil
 import subprocess
+import unicodedata
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -98,6 +99,29 @@ _WRAP_CHARS_PER_LINE = 24
 # guards against -- text running off both edges of the frame -- is far worse
 # than an extra line break.
 _HOOK_CHARS_PER_LINE = 20
+_HOOK_MAX_LINES = 2
+
+# Unicode general categories the Thai font has no glyphs for.
+_UNRENDERABLE = frozenset({"So", "Sk", "Cf", "Cn", "Co", "Cs"})
+
+
+def _strip_unrenderable(text: str) -> str:
+    """Drop characters the hook's font cannot draw.
+
+    drawtext takes ONE fontfile and has no fallback chain, so any codepoint
+    missing from the Thai font renders as a tofu box rather than falling back
+    to an emoji font. A shipped tips video had `□□□□□□□` mid-hook where the
+    model had written emoji.
+
+    Removes symbols (So/Sk -- emoji, arrows, dingbats), format characters
+    (Cf -- variation selectors and ZWJ, which are what glue multi-codepoint
+    emoji together and would otherwise leave orphaned fragments), and
+    unassigned/private-use codepoints. Thai letters are Lo and their vowel
+    and tone marks are Mn, so nothing in the actual copy is touched.
+    """
+    kept = [ch for ch in text if unicodedata.category(ch) not in _UNRENDERABLE]
+    return re.sub(r"\s{2,}", " ", "".join(kept)).strip()
+
 
 
 def _thai_clusters(text: str) -> list[str]:
@@ -165,8 +189,17 @@ def _hook_overlay(font: str | None, hook: str, work_dir: str) -> str:
     """
     if not hook or not font:
         return ""
-    safe = hook.replace("'", "").replace(":", " ")
+    safe = _strip_unrenderable(hook).replace("'", "").replace(":", " ")
+    if not safe:
+        return ""
     lines = thai.wrap(safe, _HOOK_CHARS_PER_LINE) or [safe]
+    # Cap the height. drawtext paints an opaque box behind the text, so a
+    # long hook does not merely look busy -- it blankets the tips card
+    # underneath it (a 4-line hook covered the card's number and headline).
+    # Two lines is what a hook needs; anything longer is a caption.
+    if len(lines) > _HOOK_MAX_LINES:
+        lines = lines[:_HOOK_MAX_LINES]
+        lines[-1] = lines[-1].rstrip() + "…"
     path = os.path.abspath(os.path.join(work_dir, "hook.txt"))
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
