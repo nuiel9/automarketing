@@ -70,7 +70,9 @@ def render_demo(
             # EN/TH language switcher), and an unscoped selector picks that one
             # and silently never logs in.
             email, password = login
-            page.goto(f"{base_url.rstrip('/')}/th/login", timeout=60_000)
+            # base_url already carries the locale (…/th), so append only
+            # "/login" — appending "/th/login" yields /th/th/login and 404s.
+            page.goto(f"{base_url.rstrip('/')}/login", timeout=60_000)
             page.fill("#email", email, timeout=30_000)
             page.fill("#password", password)
             page.click("form button[type=submit]")
