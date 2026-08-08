@@ -445,3 +445,141 @@ def test_a_valid_strategy_actually_selects_music_for_both_formats(db, tmp_path, 
             f"{fmt} should draw from its own configured list, got {calls[0]['music_track']}"
         )
         assert calls[0]["music_lufs"] == -33.0
+
+
+def _motion_item(db, **kw):
+    item = ContentItem(slug="w32-ad", topic="เทคนิคจำศัพท์", status="rendering",
+                       format="motion_ad", **kw)
+    db.add(item); db.commit()
+    return item
+
+
+def _stub_motion_ad(monkeypatch, tmp_path, *, generate, poll=None):
+    from app.strategy import MusicConfig, Strategy
+    from app.video.ad_copy import AdCopy
+
+    copy = AdCopy(kicker="k", name="Eduverse One", tagline="t", hl1="a",
+                  hl2="b", promo="p", cta="c", vo_script="v")
+    # A real Strategy, not a real strategy.yaml: unlike production/Docker,
+    # local test runs have no "./strategy.yaml" reachable from backend/'s
+    # cwd (every other module that needs one -- test_items_api.py,
+    # test_render_api.py -- monkeypatches load_strategy for the same
+    # reason). music.motion_ad mirrors the repo-root strategy.yaml so the
+    # real (unstubbed) pick_track_id still returns a real track id.
+    strategy = Strategy(
+        voice="v", audiences=["a"], banned_words=[], platform_notes={},
+        music=MusicConfig(motion_ad=["inspiration", "advertime"]),
+    )
+    monkeypatch.setattr(worker, "capture", lambda url, out, side=1080: out)
+    monkeypatch.setattr(worker, "to_data_uri", lambda p: "data:image/png;base64,AAA")
+    monkeypatch.setattr(worker, "load_strategy", lambda path: strategy)
+    monkeypatch.setattr(worker, "write_ad_copy", lambda topic, strategy: copy)
+    monkeypatch.setattr(worker, "generate_ad", generate)
+    monkeypatch.setattr(worker, "poll", poll or (lambda job_id, timeout: "https://x/y.mp4"))
+    monkeypatch.setattr(worker, "download", lambda url: b"MP4DATA")
+    monkeypatch.setattr(worker, "get_store", _fake_store({}))
+    return copy
+
+
+def test_motion_ad_stores_media_and_reaches_review(db, tmp_path, monkeypatch):
+    item = _motion_item(db)
+    calls = []
+
+    def _generate(photo, brief, copy_payload, track_id):
+        calls.append((photo, brief, copy_payload, track_id))
+        return "job-1"
+
+    copy = _stub_motion_ad(monkeypatch, tmp_path, generate=_generate)
+
+    worker.render_item(db, item.id, notify=lambda m: None)
+
+    db.refresh(item)
+    assert item.status == "in_review"
+    assert item.media_path.startswith("stored/")
+    assert item.aivdo_job_id == "job-1"
+    # Constraint 1: generate_ad must receive the CAPPED payload the
+    # banned-words gate actually checked, never the raw AdCopy fields.
+    assert calls[0][2] == copy.as_payload()
+    assert calls[0][3] in ("inspiration", "advertime")
+
+
+def test_job_id_is_persisted_before_polling(db, tmp_path, monkeypatch):
+    """The 5 credits are spent the moment generate returns.
+
+    If we only saved the id after a successful poll, a crash mid-poll would
+    lose it -- and the retry would generate a second ad and pay again.
+    """
+    item = _motion_item(db)
+    seen = {}
+
+    def _poll(job_id, timeout):
+        fresh = db.get(ContentItem, item.id)
+        seen["persisted"] = fresh.aivdo_job_id
+        return "https://x/y.mp4"
+
+    _stub_motion_ad(monkeypatch, tmp_path,
+                    generate=lambda *a, **k: "job-2", poll=_poll)
+
+    worker.render_item(db, item.id, notify=lambda m: None)
+
+    assert seen["persisted"] == "job-2", "job id must be committed before polling"
+
+
+def test_retry_resumes_an_existing_job_instead_of_paying_again(db, tmp_path, monkeypatch):
+    item = _motion_item(db, aivdo_job_id="job-existing")
+    calls = []
+
+    def _generate(*a, **k):
+        calls.append(a)
+        return "job-new"
+
+    _stub_motion_ad(monkeypatch, tmp_path, generate=_generate)
+
+    worker.render_item(db, item.id, notify=lambda m: None)
+
+    db.refresh(item)
+    assert calls == [], "an item with a job id must not dispatch a second ad"
+    assert item.aivdo_job_id == "job-existing"
+    assert item.status == "in_review"
+
+
+def test_banned_copy_fails_the_item_without_calling_aivdo(db, tmp_path, monkeypatch):
+    from app.video.ad_copy import BannedCopyError
+
+    item = _motion_item(db)
+    called = []
+    _stub_motion_ad(monkeypatch, tmp_path,
+                    generate=lambda *a, **k: called.append(1) or "job-x")
+
+    def _boom(topic, strategy):
+        raise BannedCopyError(["รับประกันสอบติด"])
+
+    monkeypatch.setattr(worker, "write_ad_copy", _boom)
+    notes = []
+
+    worker.render_item(db, item.id, notify=notes.append)
+
+    db.refresh(item)
+    assert item.status == "failed"
+    assert "รับประกันสอบติด" in item.render_error
+    assert called == [], "banned copy must never reach AIVDO -- it costs credits"
+    assert notes
+
+
+def test_out_of_credits_produces_a_distinct_message(db, tmp_path, monkeypatch):
+    from app.video.aivdo import OutOfCreditsError
+
+    item = _motion_item(db)
+
+    def _broke(*a, **k):
+        raise OutOfCreditsError("AIVDO is out of credits: Need 5.")
+
+    _stub_motion_ad(monkeypatch, tmp_path, generate=_broke)
+    notes = []
+
+    worker.render_item(db, item.id, notify=notes.append)
+
+    db.refresh(item)
+    assert item.status == "failed"
+    assert "credits" in item.render_error.lower()
+    assert notes
