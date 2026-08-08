@@ -44,8 +44,13 @@ class Settings(BaseSettings):
     # own VOICE_REGISTRY as male/Informative -- so ads sound like the channel.
     aivdo_voice: str = "Charon"
     # Seconds. A healthy render takes ~2 minutes; this is the ceiling before
-    # we give up and fail the item.
-    aivdo_poll_timeout: int = 900
+    # we give up and fail the item. Deliberately below the render Cloud Run
+    # job's --task-timeout=15m (900s): the screenshot capture and ad-copy
+    # generation both run before poll() starts (bounded ~60s + one Gemini
+    # call), so 600 leaves comfortable margin for poll()'s own precise
+    # "last status/stage" error to fire inside the task's budget instead of
+    # Cloud Run silently killing the task first.
+    aivdo_poll_timeout: int = 600
     # Public page screenshotted for the ad photo. Deliberately a page that
     # needs no login, so this path never touches the demo account.
     ad_shot_url: str = "https://eduverse.one/th"

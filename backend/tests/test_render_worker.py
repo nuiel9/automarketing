@@ -571,6 +571,68 @@ def test_retry_resumes_an_existing_job_instead_of_paying_again(db, tmp_path, mon
     assert item.status == "in_review"
 
 
+def test_terminal_job_failure_clears_the_job_id_so_render_can_start_over(db, tmp_path, monkeypatch):
+    """Once AIVDO itself reports a job as failed/canceled, resuming it can
+    only fail identically forever -- only a manual database edit would
+    otherwise recover the item. worker.py must clear aivdo_job_id in this
+    case so the operator's next press of Render dispatches a fresh job
+    through the normal UI instead."""
+    from app.video.aivdo import AivdoJobDeadError
+
+    item = _motion_item(db, aivdo_job_id="job-dead")
+    calls = []
+
+    def _poll(job_id, timeout):
+        raise AivdoJobDeadError(f"AIVDO job {job_id} failed: render blew up")
+
+    _stub_motion_ad(monkeypatch, tmp_path,
+                    generate=lambda *a, **k: calls.append(1) or "job-new",
+                    poll=_poll)
+    notes = []
+
+    worker.render_item(db, item.id, notify=notes.append)
+
+    db.refresh(item)
+    assert calls == [], "resuming a confirmed-dead job must not dispatch a new one itself"
+    assert item.status == "failed"
+    assert item.aivdo_job_id is None, "a confirmed-dead job id must be cleared, not left to resume forever"
+    assert "failed" in item.render_error
+    assert notes
+
+
+def test_unresolved_poll_failure_preserves_the_job_id_so_retry_resumes(db, tmp_path, monkeypatch):
+    """The opposite case from the terminal one above: a poll deadline (or
+    the publisher's stuck-render sweep marking the item failed without ever
+    calling poll() at all) does NOT mean the AIVDO job is dead -- it may
+    still be running or may already have finished. aivdo_job_id must
+    survive so the next Render press resumes it instead of paying for a
+    second job on top of one that might still complete."""
+    from app.video.aivdo import AivdoError
+
+    item = _motion_item(db, aivdo_job_id="job-unresolved")
+    calls = []
+
+    def _poll(job_id, timeout):
+        raise AivdoError(
+            f"AIVDO job {job_id} did not finish within {timeout}s "
+            "(last status='queued' stage='')")
+
+    _stub_motion_ad(monkeypatch, tmp_path,
+                    generate=lambda *a, **k: calls.append(1) or "job-new",
+                    poll=_poll)
+    notes = []
+
+    worker.render_item(db, item.id, notify=notes.append)
+
+    db.refresh(item)
+    assert calls == [], "an unresolved job must not be abandoned for a fresh dispatch"
+    assert item.status == "failed"
+    assert item.aivdo_job_id == "job-unresolved", (
+        "an unresolved job's id must survive a failure so a retry resumes it"
+    )
+    assert notes
+
+
 def test_banned_copy_fails_the_item_without_calling_aivdo(db, tmp_path, monkeypatch):
     from app.video.ad_copy import BannedCopyError
 
@@ -594,13 +656,22 @@ def test_banned_copy_fails_the_item_without_calling_aivdo(db, tmp_path, monkeypa
     assert notes
 
 
-def test_out_of_credits_produces_a_distinct_message(db, tmp_path, monkeypatch):
+def test_out_of_credits_fails_the_item_and_preserves_the_message(db, tmp_path, monkeypatch):
+    """OutOfCreditsError isn't special-cased anywhere in worker.py -- it
+    goes through the same generic `except Exception` path as any other
+    AivdoError. What this test actually guarantees is that render_item
+    doesn't truncate, replace, or swallow the raised message on its way
+    into item.render_error and the notify call. (Whether AIVDO's out-of-
+    credits wording is itself distinct from other AIVDO errors is
+    test_aivdo.py's test_out_of_credits_is_its_own_error's job, not this
+    one's.)"""
     from app.video.aivdo import OutOfCreditsError
 
     item = _motion_item(db)
+    message = "AIVDO is out of credits: Need 5."
 
     def _broke(*a, **k):
-        raise OutOfCreditsError("AIVDO is out of credits: Need 5.")
+        raise OutOfCreditsError(message)
 
     _stub_motion_ad(monkeypatch, tmp_path, generate=_broke)
     notes = []
@@ -609,5 +680,5 @@ def test_out_of_credits_produces_a_distinct_message(db, tmp_path, monkeypatch):
 
     db.refresh(item)
     assert item.status == "failed"
-    assert "credits" in item.render_error.lower()
-    assert notes
+    assert item.render_error == message
+    assert any(message in n for n in notes)

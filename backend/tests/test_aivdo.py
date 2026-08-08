@@ -7,6 +7,7 @@ import respx
 from app.config import get_settings
 from app.video.aivdo import (
     AivdoError,
+    AivdoJobDeadError,
     ModerationError,
     OutOfCreditsError,
     download,
@@ -48,6 +49,34 @@ def test_generate_sends_the_configured_style_voice_and_track():
     assert sent["photos"] == ["data:image/png;base64,AAA"]
     assert sent["copy"] == COPY
     assert body.headers["X-API-Key"]
+
+
+@respx.mock
+def test_200_without_a_job_id_raises_and_warns_credits_were_spent():
+    """The 5 credits are deducted the instant AIVDO returns 200 -- a body
+    that doesn't carry a usable job_id must not raise the bare KeyError a
+    naive `body["job_id"]` would, and item.render_error must not end up as
+    the string 'job_id'. It must say plainly that credits were probably
+    spent and there's no job id to show for it."""
+    respx.post(f"{BASE}/api/ads/generate").mock(
+        return_value=httpx.Response(200, json={"credits_remaining": 42}))
+
+    with pytest.raises(AivdoError) as exc:
+        generate_ad("data:image/png;base64,AAA", "brief", COPY, None)
+    # Not a bare KeyError('job_id') -- that's exactly the failure mode this
+    # guard exists to prevent (item.render_error would end up as 'job_id').
+    assert isinstance(exc.value, AivdoError)
+    assert "credit" in str(exc.value).lower()
+
+
+@respx.mock
+def test_200_with_unparseable_body_raises_instead_of_crashing():
+    respx.post(f"{BASE}/api/ads/generate").mock(
+        return_value=httpx.Response(200, content=b"not json"))
+
+    with pytest.raises(AivdoError) as exc:
+        generate_ad("data:image/png;base64,AAA", "brief", COPY, None)
+    assert "credit" in str(exc.value).lower()
 
 
 @respx.mock
@@ -144,6 +173,25 @@ def test_terminal_failure_raises_with_aivdos_error_text(status):
     with pytest.raises(AivdoError) as exc:
         poll("j2", timeout=30, interval=0)
     assert "render blew up" in str(exc.value)
+    # Specifically the dead-job subclass -- this is what lets the caller
+    # tell "AIVDO confirmed this job is dead" from "we merely gave up
+    # watching it" and decide whether clearing the persisted job id is safe.
+    assert isinstance(exc.value, AivdoJobDeadError)
+
+
+@respx.mock
+def test_poll_timeout_is_not_a_dead_job_error():
+    """A deadline timeout means WE stopped watching, not that AIVDO
+    reported the job dead -- it may still be running or may already have
+    finished. This must stay a plain AivdoError so a persisted job id
+    survives it and a retry can resume rather than pay for a new job."""
+    respx.get(f"{BASE}/api/jobs/j2b").mock(
+        return_value=httpx.Response(200, json={"status": "queued",
+                                               "current_stage": "Queued"}))
+
+    with pytest.raises(AivdoError) as exc:
+        poll("j2b", timeout=0, interval=0)
+    assert not isinstance(exc.value, AivdoJobDeadError)
 
 
 @respx.mock
@@ -191,6 +239,25 @@ def test_poll_timeout_elapses_across_multiple_iterations():
         poll("j5", timeout=0.05, interval=0)
     assert time.monotonic() - start >= 0.04
     assert route.call_count > 1
+
+
+@respx.mock
+def test_non_200_poll_response_is_logged(caplog):
+    """A non-200 poll response used to update no state and log nothing --
+    silent until the deadline. It must at least warn, so an operator
+    watching logs during an incident sees AIVDO was misbehaving rather than
+    plain silence up to the eventual timeout."""
+    respx.get(f"{BASE}/api/jobs/j6").mock(side_effect=[
+        httpx.Response(500, text="boom"),
+        httpx.Response(200, json={"status": "completed",
+                                  "output_url": "https://storage.googleapis.com/z.mp4"}),
+    ])
+
+    with caplog.at_level("WARNING"):
+        result = poll("j6", timeout=30, interval=0)
+
+    assert result == "https://storage.googleapis.com/z.mp4"
+    assert any("j6" in r.message and "500" in r.message for r in caplog.records)
 
 
 @respx.mock

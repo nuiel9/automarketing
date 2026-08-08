@@ -79,6 +79,43 @@ def test_render_from_in_review_item_succeeds(client_with_db, fake_dispatch):
     assert fake_dispatch == [item["id"]]
 
 
+def test_render_switching_away_from_motion_ad_clears_the_stale_job_id(client_with_db, db, fake_dispatch):
+    # A stale aivdo_job_id from a previous motion_ad lifetime must not
+    # survive a switch to another format -- otherwise switching this item
+    # back to motion_ad later would try to resume a job that has nothing to
+    # do with this render attempt.
+    from app.models import ContentItem
+    item = ContentItem(slug="w32-switch", topic="t", status="failed",
+                       format="motion_ad", aivdo_job_id="job-old")
+    db.add(item); db.commit()
+
+    resp = client_with_db.post(
+        f"/api/items/{item.id}/render", json={"format": "tips"}, headers=AUTH
+    )
+
+    assert resp.status_code == 200
+    db.refresh(item)
+    assert item.aivdo_job_id is None
+
+
+def test_render_motion_ad_again_leaves_an_existing_job_id_alone(client_with_db, db, fake_dispatch):
+    # Re-requesting motion_ad on an item that still has a job id must not
+    # clear it here -- worker.py's resume-instead-of-recharge logic depends
+    # on it still being there when the render actually runs.
+    from app.models import ContentItem
+    item = ContentItem(slug="w32-same-format", topic="t", status="failed",
+                       format="motion_ad", aivdo_job_id="job-existing")
+    db.add(item); db.commit()
+
+    resp = client_with_db.post(
+        f"/api/items/{item.id}/render", json={"format": "motion_ad"}, headers=AUTH
+    )
+
+    assert resp.status_code == 200
+    db.refresh(item)
+    assert item.aivdo_job_id == "job-existing"
+
+
 def test_bad_format_is_422(client_with_db):
     item = _create(client_with_db).json()
     resp = client_with_db.post(

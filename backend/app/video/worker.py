@@ -11,7 +11,7 @@ from app.notify import line_notify
 from app.state import transition
 from app.strategy import MusicConfig, load_strategy
 from app.video.ad_copy import write_ad_copy
-from app.video.aivdo import download, generate_ad, poll
+from app.video.aivdo import AivdoJobDeadError, download, generate_ad, poll
 from app.video.compose import compose
 from app.video.demo import RenderStepError, render_demo
 from app.video.music import pick_track, pick_track_id
@@ -182,6 +182,16 @@ def render_item(session, item_id: str, notify=line_notify) -> None:
                 if ref:
                     suffix = f" [screenshot: {ref}]"
             item.render_error = detail + suffix
+            if isinstance(exc, AivdoJobDeadError):
+                # AIVDO itself confirmed this job is dead (failed/canceled) --
+                # resuming it would just fail identically forever. Clear it
+                # so the next press of Render dispatches a fresh job instead
+                # of requiring a manual database edit to recover. Any other
+                # AivdoError (a poll deadline, a transient network error, the
+                # publisher's stuck-render sweep) leaves the job's fate
+                # unknown, so aivdo_job_id must survive for a retry to
+                # resume it rather than pay for a second one.
+                item.aivdo_job_id = None
             if item.status == "rendering":
                 transition(item, "failed")
             # suffix appended after truncating detail (not inside the

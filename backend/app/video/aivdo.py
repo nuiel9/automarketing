@@ -35,6 +35,16 @@ class ModerationError(AivdoError):
     pass
 
 
+class AivdoJobDeadError(AivdoError):
+    """AIVDO itself reported the job as terminally `failed`/`canceled`.
+
+    Distinct from a bare AivdoError (e.g. a poll deadline, or a transient
+    network error) so the caller can tell "this job is confirmed dead,
+    resuming it is pointless" from "we simply don't know yet" -- only the
+    former should ever clear a persisted aivdo_job_id.
+    """
+
+
 def _detail(resp: httpx.Response) -> str:
     try:
         return str(resp.json().get("detail", resp.text))[:300]
@@ -101,11 +111,28 @@ def generate_ad(photo_data_uri: str, brief: str, copy: dict,
                 f"already be spent; check AIVDO before retrying: {exc}"
             ) from exc
         if resp.status_code == 200:
-            body = resp.json()
+            try:
+                body = resp.json()
+            except ValueError as exc:
+                # The 5 credits are spent the instant AIVDO returns 200 --
+                # a body we can't even parse still means the dispatch went
+                # through, we just have no job id to show for it.
+                raise AivdoError(
+                    "AIVDO returned 200 but the body was not valid JSON -- "
+                    "5 credits were probably already spent and no job id "
+                    f"was returned; check AIVDO before retrying: {exc}"
+                ) from exc
+            job_id = body.get("job_id")
             # The only visibility we get into the budget.
             log.info("motion_ad dispatched job=%s credits_remaining=%s",
-                     body.get("job_id"), body.get("credits_remaining"))
-            return body["job_id"]
+                     job_id, body.get("credits_remaining"))
+            if not job_id:
+                raise AivdoError(
+                    "AIVDO returned 200 with no job_id in the body -- 5 "
+                    "credits were probably already spent and no job id was "
+                    "returned; check AIVDO before retrying"
+                )
+            return job_id
         if resp.status_code == 402:
             raise OutOfCreditsError(f"AIVDO is out of credits: {_detail(resp)}")
         if resp.status_code == 400:
@@ -155,8 +182,11 @@ def poll(job_id: str, timeout: int, interval: float = 10.0) -> str:
                             f"job {job_id} completed without an output_url")
                     return url
                 if status in _TERMINAL_BAD:
-                    raise AivdoError(
+                    raise AivdoJobDeadError(
                         f"AIVDO job {job_id} {status}: {body.get('error') or 'no reason given'}")
+            else:
+                log.warning("polling AIVDO job %s returned %s",
+                            job_id, resp.status_code)
         except httpx.HTTPError as exc:
             # A transient polling error must not lose a job whose credits are
             # already spent -- keep polling until the deadline.
