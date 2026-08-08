@@ -265,7 +265,7 @@ def retry(item_id: str, session: Session = Depends(get_session)):
     return item_json(item)
 
 
-RENDERABLE_FORMATS = {"demo", "tips"}
+RENDERABLE_FORMATS = {"demo", "tips", "motion_ad"}
 SCENARIO_ROOT = os.environ.get("SCENARIO_ROOT", "./scenarios")
 
 
