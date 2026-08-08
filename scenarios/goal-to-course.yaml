@@ -1,0 +1,39 @@
+# Demo scenario: type a goal -> Eduverse builds the course.
+#
+# Selectors verified against the LIVE site 2026-08-08 (eduverse.one/th).
+# The app ships no data-testid / id attributes on the goals form, so these are
+# structural. If a render fails with "waiting for locator", re-check the live
+# markup before editing anything else — the screenshot in the LINE alert shows
+# the page as it was when the step timed out.
+#
+#   #email / #password        -> login form (ids confirmed on /th/login)
+#   form button[type=submit]  -> login submit; the page ALSO has a language
+#                                switcher of type=submit, so scope to the form
+#   textarea[required]        -> the goal box: the only required textarea in
+#                                the goals form (motivation/background are not)
+name: goal-to-course
+login: true
+steps:
+  - narration: "อยากเรียนอะไรสักอย่าง แต่ไม่รู้จะเริ่มตรงไหน"
+    action: goto
+    url: https://eduverse.one/th/goals
+    timeout_ms: 60000
+
+  - narration: "แค่พิมพ์เป้าหมายที่อยากไปให้ถึง"
+    action: type
+    selector: "textarea[required]"
+    text: "อ่านงบการเงินเป็นภายใน 3 เดือน"
+    sound: keystroke
+    timeout_ms: 30000
+
+  - narration: "กดสร้าง แล้วรอแป๊บเดียว"
+    action: click
+    selector: "form button[type=submit]"
+    sound: click
+    timeout_ms: 30000
+
+  - narration: "ระบบสร้างคอร์สให้ทั้งคอร์ส พร้อมพี่กวี ติวเตอร์เสียงไทยที่คุยกับคุณได้จริง"
+    action: wait_for
+    selector: "a[href*='/courses/']"
+    fit: speedup
+    timeout_ms: 180000

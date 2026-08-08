@@ -63,10 +63,17 @@ def render_demo(
         page.goto(base_url, timeout=60_000)
 
         if scenario.login and login:
+            # Selectors verified against the live eduverse.one/th/login page on
+            # 2026-08-08. The app has no data-testid attributes, so these are
+            # the real element ids. The submit button MUST be scoped to the
+            # form: the page header also carries a type=submit button (the
+            # EN/TH language switcher), and an unscoped selector picks that one
+            # and silently never logs in.
             email, password = login
-            page.fill("[data-testid=email]", email, timeout=30_000)
-            page.fill("[data-testid=password]", password)
-            page.click("[data-testid=login-submit]")
+            page.goto(f"{base_url.rstrip('/')}/th/login", timeout=60_000)
+            page.fill("#email", email, timeout=30_000)
+            page.fill("#password", password)
+            page.click("form button[type=submit]")
             page.wait_for_load_state("networkidle", timeout=60_000)
 
         for index, step in enumerate(scenario.steps):
