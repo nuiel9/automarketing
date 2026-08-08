@@ -19,6 +19,25 @@ steps:
     url: https://eduverse.one/th/goals
     timeout_ms: 60000
 
+  # The goals page renders in one of TWO shapes, and the demo account flips
+  # from the first to the second the moment it creates its first goal:
+  #   0 goals  -> the form is auto-opened (goals/page.tsx:254 setShowForm(true))
+  #              and there is NO "new goal" button (it renders only when the
+  #              form is closed), so `textarea[required]` is present.
+  #   1+ goals -> the form starts collapsed, so the textarea does NOT exist
+  #              yet and the "ตั้งเป้าหมายกับคาวี" button is what's rendered.
+  # A selector list covers both: Playwright's page.click() is non-strict and
+  # takes the FIRST match in DOM order, so it clicks the button when the form
+  # is collapsed and merely focuses the textarea when it is already open --
+  # harmless, since the next step fills that same textarea. Verified against
+  # both shapes in test_goals_page_selector_works_in_both_states.
+  # (The goal cards are also <button>s, but :has-text scopes to this one.)
+  - narration: "เปิดกล่องตั้งเป้าหมายกับพี่กวี"
+    action: click
+    selector: "button:has-text('ตั้งเป้าหมายกับคาวี'), textarea[required]"
+    sound: click
+    timeout_ms: 30000
+
   - narration: "แค่พิมพ์เป้าหมายที่อยากไปให้ถึง"
     action: type
     selector: "textarea[required]"

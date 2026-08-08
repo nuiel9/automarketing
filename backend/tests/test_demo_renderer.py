@@ -145,3 +145,56 @@ def test_marks_share_timeline_origin_with_recording(tmp_path, slow_load_fixture_
         "the mark timeline is missing that time, meaning t0 was captured "
         "after goto/login instead of right after context.new_page()"
     )
+
+
+# The two shapes the real eduverse.one/th/goals page takes. The demo account
+# flips from EMPTY to HAS_GOALS permanently the moment it creates its first
+# goal (goals/page.tsx auto-opens the form only when the account has zero
+# goals), which is exactly how the first production demo render broke: it
+# succeeded once, created a goal, and every later run then timed out waiting
+# for a textarea that the collapsed form no longer rendered.
+GOALS_EMPTY_HTML = """<!doctype html><meta charset=utf-8>
+<body><form><textarea required></textarea>
+<button type=submit>สร้างเป้าหมาย</button></form></body>"""
+
+GOALS_HAS_GOALS_HTML = """<!doctype html><meta charset=utf-8>
+<body>
+<button type=button>อ่านงบการเงินเป็นภายใน 3 เดือน</button>
+<button type=button onclick="
+  document.body.insertAdjacentHTML('beforeend',
+    '<form><textarea required></textarea><button type=submit>ok</button></form>')
+">ตั้งเป้าหมายกับคาวี</button>
+</body>"""
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("html", [GOALS_EMPTY_HTML, GOALS_HAS_GOALS_HTML],
+                         ids=["zero-goals-form-open", "has-goals-form-collapsed"])
+def test_goals_page_selector_works_in_both_states(tmp_path, monkeypatch, html):
+    """The shipped goal-to-course scenario must survive both page shapes.
+
+    It relies on page.click() being NON-strict -- taking the first match in
+    DOM order from a selector list -- so one step both opens the collapsed
+    form and no-ops (focuses the textarea) when the form is already open.
+    If Playwright ever makes page.click() strict, this test fails loudly
+    instead of the failure surfacing as a 3am production render timeout.
+    """
+    import app.video.demo as demo
+    from app.video.scenario import load_scenario
+
+    monkeypatch.setattr(demo, "synthesize", _fake_synth(tmp_path))
+
+    page = tmp_path / "goals.html"
+    page.write_text(html, encoding="utf-8")
+
+    root = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(demo.__file__)))), "..", "scenarios")
+    shipped = load_scenario("goal-to-course", os.path.normpath(root))
+    open_step, type_step = shipped.steps[1], shipped.steps[2]
+    assert open_step.action == "click" and type_step.action == "type"
+
+    # Replay only the state-sensitive pair against the fixture; the rest of
+    # the scenario talks to the live app and cannot run offline.
+    scenario = Scenario(name="fx", login=False, steps=[open_step, type_step])
+    segments = render_demo(scenario, str(tmp_path), base_url=f"file://{page}", login=None)
+    assert len(segments) == 2
