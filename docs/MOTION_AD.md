@@ -56,7 +56,7 @@ centre-cropped to a narrow band.
 Pressing Render is also the point where credits get spent, once the
 banned-words gate and AIVDO's own moderation both pass — see "When it
 fails" below for exactly what does and doesn't cost you. A healthy render
-takes about two minutes; `AIVDO_POLL_TIMEOUT` (900s / 15 minutes) is the
+takes about two minutes; `AIVDO_POLL_TIMEOUT` (600s / 10 minutes) is the
 ceiling before the item is failed rather than left waiting forever.
 
 ## Tuning
@@ -100,7 +100,7 @@ to just press Render again.
 | `ad copy contains banned words: …` | Our gate caught brand-voice copy | **No** — never reached AIVDO |
 | `AIVDO rejected the ad copy: Content blocked: …` | AIVDO's moderation | **No** — it moderates before deducting |
 | `AIVDO is out of credits: …` | Account balance below 5 | **No** — top up and retry |
-| `AIVDO job … failed/canceled: …` | Render failed on AIVDO's side | **Yes** — not refunded |
+| `AIVDO job … failed/canceled: …` | Render failed on AIVDO's side | **Yes** — not refunded; `aivdo_job_id` is cleared automatically, so pressing Render again starts a fresh job rather than re-resuming the dead one |
 | `AIVDO job … did not finish within …s` | Timed out while polling | **Yes** — but the job id is saved, so a retry resumes rather than paying again |
 | `could not reach AIVDO: …` | Every connection attempt failed before the request reached AIVDO | **No** — nothing was ever sent |
 | `AIVDO dispatch request failed after it may have reached the server …` / `AIVDO returned <5xx>; a job may already exist …` | A read timeout, or a 5xx other than 503, while dispatching | **Unknown** — check AIVDO's job list before re-running rather than guessing |
@@ -117,16 +117,28 @@ response was lost. Retrying blind in that case risks a second dispatch
 with no job id ever saved to resume from, which is unrecoverable, so it
 raises immediately instead and tells you to check AIVDO first.
 
-One more case worth knowing about, because the numbers line up in a way
-that hides it: `AIVDO_POLL_TIMEOUT` defaults to 900s (15 minutes), and
-`docs/DEPLOY.md`'s `automarketing-render` job is created with
-`--task-timeout=15m` — the same 900 seconds. The screenshot capture and the
-ad-copy generation both run *before* polling starts, so a job genuinely
-stuck at AIVDO can hit Cloud Run's task timeout and get killed before
-`poll()` ever gets a chance to raise its own "did not finish within 900s"
-error. When that happens, the item is left sitting at `rendering` with
-`render_error` still null and no LINE alert — the process was killed, not
-raised, so nothing runs the except block that would have sent one. The 5
-credits are spent either way, and `aivdo_job_id` is still saved on the
-item, so the fix is the same as an ordinary poll timeout: check the job on
-AIVDO, then re-render the item to resume polling rather than paying again.
+One more case worth knowing about, because it used to hide behind numbers
+that lined up exactly: `AIVDO_POLL_TIMEOUT` used to default to 900s (15
+minutes) — the same as `docs/DEPLOY.md`'s `automarketing-render` job's
+`--task-timeout=15m`. The screenshot capture and the ad-copy generation
+both run *before* polling starts, so at 900/900 a job genuinely stuck at
+AIVDO could hit Cloud Run's task timeout and get killed before `poll()`
+ever got a chance to raise its own "did not finish within …s" error. The
+default is now 600s (10 minutes): capture and copy generation together take
+well under a minute, so `poll()` keeps roughly 230s of margin to raise its
+own precise last-status error inside Cloud Run's 900s budget instead of
+being killed first.
+
+If a Cloud Run kill still happens — say `AIVDO_POLL_TIMEOUT` is overridden
+back up near 900 — the item is left sitting at `rendering` with
+`render_error` still null: the process was killed, not raised, so nothing
+runs the except block that would normally set it and notify. That is
+**not** silent forever, though: the publisher's stuck-render sweep
+(`backend/app/publisher.py`, `RENDER_MAX_AGE` = 20 minutes) independently
+marks any item stuck at `rendering` as `failed`, sets
+`render_error = "render timed out"`, and sends a LINE alert — roughly 20
+minutes after `aivdo_job_id` was committed, not immediately. The 5 credits
+are spent either way, and `aivdo_job_id` is still saved on the item (the
+sweep only changes status and render_error, never the job id), so the fix
+is the same as an ordinary poll timeout: check the job on AIVDO, then
+re-render the item to resume polling rather than paying again.
