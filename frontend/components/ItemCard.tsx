@@ -98,6 +98,11 @@ export default function ItemCard({ item, onChanged }: { item: Item; onChanged: (
             >
               <option value="demo">เดโมสินค้า</option>
               <option value="tips">การ์ดเคล็ดลับ</option>
+              {/* Labelled with its cost: motion_ad is the only format that
+                  spends AIVDO credits, and they are deducted the moment the
+                  render is dispatched -- not refunded if it fails afterwards.
+                  The reviewer should see that before pressing the button. */}
+              <option value="motion_ad">โฆษณาสั้น 11 วินาที (ใช้ 5 เครดิต)</option>
             </select>
             {fmt === "demo" && (
               <input
