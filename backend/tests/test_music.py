@@ -194,3 +194,49 @@ def test_music_survives_alongside_ui_blips(tmp_path):
         "adding music to a mix that already has UI blips did not raise the "
         "mean level -- the bed was dropped from the filtergraph"
     )
+
+
+def test_pick_track_id_needs_no_file_on_disk():
+    """The distinguishing property vs pick_track.
+
+    For motion_ad we send a track ID to AIVDO, which builds the bed itself --
+    the mp3 is never read locally. Reusing pick_track here would check the
+    filesystem, find nothing, return None, and silently ship every ad with
+    the template's default bed.
+    """
+    from app.video.music import pick_track_id
+
+    assert pick_track_id(["inspiration", "city-sunshine"], "item-1") in (
+        "inspiration", "city-sunshine",
+    )
+
+
+def test_pick_track_id_is_stable_per_item_and_spreads_across_items():
+    from app.video.music import pick_track_id
+
+    ids = ["inspiration", "city-sunshine", "motions"]
+    assert all(pick_track_id(ids, "item-abc") == pick_track_id(ids, "item-abc")
+               for _ in range(5))
+    assert len({pick_track_id(ids, f"item-{i}") for i in range(40)}) == 3
+
+
+@pytest.mark.parametrize("bad", ["../secrets", "a/b", "UPPER", "", "-lead"])
+def test_pick_track_id_rejects_malformed_ids(bad):
+    from app.video.music import pick_track_id
+
+    assert pick_track_id([bad], "item-1") is None
+
+
+def test_no_tracks_configured_means_no_track_id():
+    from app.video.music import pick_track_id
+
+    assert pick_track_id([], "item-1") is None
+
+
+def test_music_config_maps_motion_ad():
+    from app.strategy import MusicConfig
+
+    cfg = MusicConfig(tips=["a"], demo=["b"], motion_ad=["c"])
+    assert cfg.for_format("motion_ad") == ["c"]
+    # An unconfigured motion_ad list must stay valid and mean "no track".
+    assert MusicConfig().for_format("motion_ad") == []

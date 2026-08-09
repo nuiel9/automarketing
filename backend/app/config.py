@@ -33,6 +33,28 @@ class Settings(BaseSettings):
     demo_password: str = ""
     anthropic_api_key: str = ""
 
+    # --- Motion Ad (AIVDO) ---
+    aivdo_api_key: str = ""
+    aivdo_base_url: str = "https://aivdo-api-b7iz53omoq-as.a.run.app"
+    # AIVDO's own template for "courses, education, B2B -- structured,
+    # technical, clean grid". It frames the photo in an 840x820 window with
+    # the ad copy drawn OUTSIDE it, which is why the screenshot is square.
+    aivdo_style: str = "blueprint"
+    # Same Gemini TTS voice Phase 2 uses for Kavee, and present in AIVDO's
+    # own VOICE_REGISTRY as male/Informative -- so ads sound like the channel.
+    aivdo_voice: str = "Charon"
+    # Seconds. A healthy render takes ~2 minutes; this is the ceiling before
+    # we give up and fail the item. Deliberately below the render Cloud Run
+    # job's --task-timeout=15m (900s): the screenshot capture and ad-copy
+    # generation both run before poll() starts (bounded ~60s + one Gemini
+    # call), so 600 leaves comfortable margin for poll()'s own precise
+    # "last status/stage" error to fire inside the task's budget instead of
+    # Cloud Run silently killing the task first.
+    aivdo_poll_timeout: int = 600
+    # Public page screenshotted for the ad photo. Deliberately a page that
+    # needs no login, so this path never touches the demo account.
+    ad_shot_url: str = "https://eduverse.one/th"
+
     enabled_channels: str = "dryrun"      # comma-separated: facebook,instagram,x,line,dryrun
 
     meta_page_id: str = ""

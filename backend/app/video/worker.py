@@ -1,3 +1,4 @@
+import io
 import logging
 import os
 import tempfile
@@ -9,10 +10,13 @@ from app.models import ContentItem
 from app.notify import line_notify
 from app.state import transition
 from app.strategy import MusicConfig, load_strategy
+from app.video.ad_copy import write_ad_copy
+from app.video.aivdo import AivdoJobDeadError, download, generate_ad, poll
 from app.video.compose import compose
 from app.video.demo import RenderStepError, render_demo
-from app.video.music import pick_track
+from app.video.music import pick_track, pick_track_id
 from app.video.scenario import ScenarioError, load_scenario
+from app.video.shot import capture, to_data_uri
 from app.video.tips import render_tips, write_tips
 
 log = logging.getLogger(__name__)
@@ -38,6 +42,43 @@ def _render_segments(item: ContentItem, work_dir: str):
         tips = write_tips(item.topic, load_strategy(settings.strategy_path))
         return render_tips(tips, work_dir), item.hook or tips.hook
     raise ValueError(f"format {item.format} is not renderable")
+
+
+def _render_motion_ad(session, item: ContentItem, work_dir: str) -> bytes:
+    """Produce a finished Motion Ad MP4 via AIVDO.
+
+    Returns the video bytes rather than Segments: this format never touches
+    compose(). AIVDO renders the whole 11-second spot, so there are no
+    subtitles, no local music bed and no hook overlay on this path.
+    """
+    settings = get_settings()
+
+    job_id = item.aivdo_job_id
+    if not job_id:
+        # strategy is only needed on the dispatch path (write_ad_copy,
+        # pick_track_id below) -- loaded here, not above, so that resuming a
+        # job whose 5 credits are ALREADY spent can never be blocked by a
+        # config load it doesn't need.
+        strategy = load_strategy(settings.strategy_path)
+        # Order matters. The screenshot and the copy are free; generate_ad
+        # spends 5 credits. Anything that can fail cheaply fails first --
+        # including the banned-words gate inside write_ad_copy.
+        png = capture(settings.ad_shot_url, os.path.join(work_dir, "shot.png"))
+        copy = write_ad_copy(item.topic, strategy)
+        track_id = pick_track_id(strategy.music.for_format("motion_ad"), item.id)
+        job_id = generate_ad(
+            to_data_uri(png),
+            f"Eduverse One: {item.topic}",
+            copy.as_payload(),
+            track_id,
+        )
+        # Commit before polling. Those credits are already spent; if this
+        # process dies now, the retry must resume THIS job rather than pay
+        # for a second one.
+        item.aivdo_job_id = job_id
+        session.commit()
+
+    return download(poll(job_id, settings.aivdo_poll_timeout))
 
 
 def _upload_screenshot(path: str | None) -> str | None:
@@ -94,33 +135,45 @@ def render_item(session, item_id: str, notify=line_notify) -> None:
 
     with tempfile.TemporaryDirectory(prefix="render-") as work_dir:
         try:
-            segments, hook = _render_segments(item, work_dir)
-            # Tips cards already display their headline and body as on-screen
-            # text, so burning the same narration over them as subtitles is
-            # redundant and collides with that text (two layers of Thai
-            # fighting each other). A demo screen-recording has no text of
-            # its own, so burned subtitles are essential there.
-            track, gain = _music_for(item)
-            mp4, poster = compose(
-                segments, hook, work_dir, subtitles=item.format == "demo",
-                music_track=track, music_lufs=gain,
-            )
-            store = get_store(get_settings())
-            with open(mp4, "rb") as f:
-                video_ref = store.save(f, "video.mp4")
-            with open(poster, "rb") as f:
-                store.save(f, "poster.jpg")
-            # Only point the item at the uploaded video once BOTH uploads
-            # have succeeded. Assigning item.media_path right after the
-            # video upload (before the poster upload could still raise)
-            # would let a poster-upload failure land the item in "failed"
-            # while media_path still pointed at a real, playable video --
-            # both items.py's media_url and the /media/{token} route gate
-            # only on media_path being truthy, never on status, so the
-            # founder would see a failed item that plays.
-            item.media_path = video_ref
-            item.render_error = None
-            transition(item, "in_review")
+            if item.format == "motion_ad":
+                video_bytes = _render_motion_ad(session, item, work_dir)
+                store = get_store(get_settings())
+                # No poster for this format. The other path saves one, but
+                # nothing reads it back -- items.py's media_url and the
+                # /media/{token} route both key off media_path alone -- and
+                # AIVDO returns only the MP4.
+                item.media_path = store.save(io.BytesIO(video_bytes), "video.mp4")
+                item.render_error = None
+                transition(item, "in_review")
+            else:
+                segments, hook = _render_segments(item, work_dir)
+                # Tips cards already display their headline and body as
+                # on-screen text, so burning the same narration over them as
+                # subtitles is redundant and collides with that text (two
+                # layers of Thai fighting each other). A demo screen-recording
+                # has no text of its own, so burned subtitles are essential
+                # there.
+                track, gain = _music_for(item)
+                mp4, poster = compose(
+                    segments, hook, work_dir, subtitles=item.format == "demo",
+                    music_track=track, music_lufs=gain,
+                )
+                store = get_store(get_settings())
+                with open(mp4, "rb") as f:
+                    video_ref = store.save(f, "video.mp4")
+                with open(poster, "rb") as f:
+                    store.save(f, "poster.jpg")
+                # Only point the item at the uploaded video once BOTH uploads
+                # have succeeded. Assigning item.media_path right after the
+                # video upload (before the poster upload could still raise)
+                # would let a poster-upload failure land the item in "failed"
+                # while media_path still pointed at a real, playable video --
+                # both items.py's media_url and the /media/{token} route gate
+                # only on media_path being truthy, never on status, so the
+                # founder would see a failed item that plays.
+                item.media_path = video_ref
+                item.render_error = None
+                transition(item, "in_review")
         except Exception as exc:
             detail = str(exc)[:2000]
             suffix = ""
@@ -129,6 +182,16 @@ def render_item(session, item_id: str, notify=line_notify) -> None:
                 if ref:
                     suffix = f" [screenshot: {ref}]"
             item.render_error = detail + suffix
+            if isinstance(exc, AivdoJobDeadError):
+                # AIVDO itself confirmed this job is dead (failed/canceled) --
+                # resuming it would just fail identically forever. Clear it
+                # so the next press of Render dispatches a fresh job instead
+                # of requiring a manual database edit to recover. Any other
+                # AivdoError (a poll deadline, a transient network error, the
+                # publisher's stuck-render sweep) leaves the job's fate
+                # unknown, so aivdo_job_id must survive for a retry to
+                # resume it rather than pay for a second one.
+                item.aivdo_job_id = None
             if item.status == "rendering":
                 transition(item, "failed")
             # suffix appended after truncating detail (not inside the

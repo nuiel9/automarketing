@@ -122,17 +122,27 @@ gcloud storage buckets add-iam-policy-binding "gs://${BUCKET}" \
 ADMIN_TOKEN_VALUE='<generate: openssl rand -hex 24>'
 TICK_TOKEN_VALUE='<generate: openssl rand -hex 24>'
 GEMINI_API_KEY_VALUE='<from aistudio.google.com — captions run on Gemini by default>'
+AIVDO_API_KEY_VALUE='<create in the AIVDO UI — see docs/MOTION_AD.md>'
 
 printf '%s' "$ADMIN_TOKEN_VALUE"     | gcloud secrets create ADMIN_TOKEN    --data-file=- --project="$PROJECT"
 printf '%s' "$TICK_TOKEN_VALUE"      | gcloud secrets create TICK_TOKEN     --data-file=- --project="$PROJECT"
 printf '%s' "$GEMINI_API_KEY_VALUE"  | gcloud secrets create GEMINI_API_KEY --data-file=- --project="$PROJECT"
+printf '%s' "$AIVDO_API_KEY_VALUE"   | gcloud secrets create AIVDO_API_KEY  --data-file=- --project="$PROJECT"
 
-for SECRET in ADMIN_TOKEN TICK_TOKEN GEMINI_API_KEY; do
+for SECRET in ADMIN_TOKEN TICK_TOKEN GEMINI_API_KEY AIVDO_API_KEY; do
   gcloud secrets add-iam-policy-binding "$SECRET" \
     --member="serviceAccount:${RUNTIME_SA}" \
     --role=roles/secretmanager.secretAccessor --project="$PROJECT"
 done
 ```
+
+`AIVDO_API_KEY` is only ever read by the render job (§10), never by the
+backend service (§6) — the backend never calls AIVDO directly, only
+`app/video/worker.py` running inside `automarketing-render` does. It's
+still created and bound here alongside the other secrets because the render
+job runs under the same `$RUNTIME_SA` as the backend (no distinct
+`--service-account` is set for it in §10), so the IAM binding needs setting
+up exactly once, in one place.
 
 Save `$ADMIN_TOKEN_VALUE`, `$TICK_TOKEN_VALUE`, and `$DB_PASSWORD` in a
 password manager now — `$TICK_TOKEN_VALUE` is needed again in cleartext for
@@ -350,7 +360,7 @@ gcloud run jobs create automarketing-render \
   --cpu=2 --memory=4Gi --task-timeout=15m --max-retries=0 \
   --network=default --subnet=default --vpc-egress=private-ranges-only \
   --set-env-vars="^##^DATABASE_URL=postgresql+psycopg://${DB_USER}:${DB_PASSWORD}@172.28.0.9:5432/${DB_NAME}##MEDIA_BACKEND=gcs##GCS_BUCKET=${BUCKET}##MEDIA_ROOT=/tmp##LINE_FOUNDER_USER_ID=${LINE_FOUNDER_USER_ID}" \
-  --set-secrets="GEMINI_API_KEY=GEMINI_API_KEY:latest,LINE_CHANNEL_ACCESS_TOKEN=eduverse-line-access-token:latest"
+  --set-secrets="GEMINI_API_KEY=GEMINI_API_KEY:latest,LINE_CHANNEL_ACCESS_TOKEN=eduverse-line-access-token:latest,AIVDO_API_KEY=AIVDO_API_KEY:latest"
 ```
 
 Without `LINE_FOUNDER_USER_ID`/`LINE_CHANNEL_ACCESS_TOKEN`, `app/notify.py`'s
@@ -358,6 +368,22 @@ Without `LINE_FOUNDER_USER_ID`/`LINE_CHANNEL_ACCESS_TOKEN`, `app/notify.py`'s
 before attempting to send when either is unset) — §12 step 2 below assumes
 this alert fires, so a job created without these two would make that step's
 expectation false.
+
+> **If `automarketing-render` already exists** (deployed before `motion_ad`
+> was added) and you're attaching the secret to it rather than recreating
+> the job from scratch:
+>
+> ```bash
+> gcloud run jobs update automarketing-render --region="$REGION" --project="$PROJECT" \
+>   --update-secrets=AIVDO_API_KEY=AIVDO_API_KEY:latest
+> ```
+>
+> Use `--update-secrets`, not `--set-secrets`, here — on `gcloud run jobs
+> update`, `--set-secrets` replaces the job's *entire* secret list rather
+> than adding to it, which would silently drop `GEMINI_API_KEY` and
+> `LINE_CHANNEL_ACCESS_TOKEN` from a job that already has them. This is the
+> same reason the `DEMO_EMAIL`/`DEMO_PASSWORD` block below uses
+> `--update-secrets` rather than `--set-secrets`.
 
 > **`DEMO_EMAIL` / `DEMO_PASSWORD` are deliberately omitted here.** They are
 > meant to be a **production eduverse.one account with credits**, created by

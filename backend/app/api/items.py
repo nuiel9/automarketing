@@ -265,7 +265,7 @@ def retry(item_id: str, session: Session = Depends(get_session)):
     return item_json(item)
 
 
-RENDERABLE_FORMATS = {"demo", "tips"}
+RENDERABLE_FORMATS = {"demo", "tips", "motion_ad"}
 SCENARIO_ROOT = os.environ.get("SCENARIO_ROOT", "./scenarios")
 
 
@@ -290,6 +290,15 @@ def render(item_id: str, body: RenderBody, session: Session = Depends(get_sessio
         transition(item, "rendering")
     except InvalidTransition as exc:
         raise HTTPException(409, str(exc))
+    if body.format != "motion_ad":
+        # A stale AIVDO job id from a previous motion_ad lifetime must not
+        # survive a switch to another format -- if this item is ever
+        # switched back to motion_ad later, worker.py must not try to
+        # resume a job that has nothing to do with this render attempt.
+        # A motion_ad -> motion_ad re-render intentionally leaves this
+        # alone: that's what lets a resume avoid paying again, and a
+        # confirmed-dead job's id is already cleared by worker.py itself.
+        item.aivdo_job_id = None
     item.format = body.format
     item.scenario = body.scenario
     item.render_error = None

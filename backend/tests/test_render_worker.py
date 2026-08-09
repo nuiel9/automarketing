@@ -445,3 +445,240 @@ def test_a_valid_strategy_actually_selects_music_for_both_formats(db, tmp_path, 
             f"{fmt} should draw from its own configured list, got {calls[0]['music_track']}"
         )
         assert calls[0]["music_lufs"] == -33.0
+
+
+def _motion_item(db, **kw):
+    item = ContentItem(slug="w32-ad", topic="เทคนิคจำศัพท์", status="rendering",
+                       format="motion_ad", **kw)
+    db.add(item); db.commit()
+    return item
+
+
+def _stub_motion_ad(monkeypatch, tmp_path, *, generate, poll=None):
+    from app.strategy import MusicConfig, Strategy
+    from app.video.ad_copy import AdCopy
+
+    # vo_script deliberately exceeds its 160-char cap (_CAPS in ad_copy.py):
+    # as_payload() and model_dump() must differ, or an assertion comparing
+    # generate_ad's payload against as_payload() can't tell the capped
+    # (gate-checked) text from the raw fields -- every field being short
+    # made that comparison a no-op before this change.
+    copy = AdCopy(kicker="k", name="Eduverse One", tagline="t", hl1="a",
+                  hl2="b", promo="p", cta="c", vo_script="v" * 170)
+    # A real Strategy, not a real strategy.yaml: unlike production/Docker,
+    # local test runs have no "./strategy.yaml" reachable from backend/'s
+    # cwd (every other module that needs one -- test_items_api.py,
+    # test_render_api.py -- monkeypatches load_strategy for the same
+    # reason). music.motion_ad mirrors the repo-root strategy.yaml so the
+    # real (unstubbed) pick_track_id still returns a real track id.
+    strategy = Strategy(
+        voice="v", audiences=["a"], banned_words=[], platform_notes={},
+        music=MusicConfig(motion_ad=["inspiration", "advertime"]),
+    )
+    monkeypatch.setattr(worker, "capture", lambda url, out, side=1080: out)
+    monkeypatch.setattr(worker, "to_data_uri", lambda p: "data:image/png;base64,AAA")
+    monkeypatch.setattr(worker, "load_strategy", lambda path: strategy)
+    monkeypatch.setattr(worker, "write_ad_copy", lambda topic, strategy: copy)
+    monkeypatch.setattr(worker, "generate_ad", generate)
+    monkeypatch.setattr(worker, "poll", poll or (lambda job_id, timeout: "https://x/y.mp4"))
+    monkeypatch.setattr(worker, "download", lambda url: b"MP4DATA")
+    monkeypatch.setattr(worker, "get_store", _fake_store({}))
+    return copy
+
+
+def test_motion_ad_stores_media_and_reaches_review(db, tmp_path, monkeypatch):
+    item = _motion_item(db)
+    calls = []
+
+    def _generate(photo, brief, copy_payload, track_id):
+        calls.append((photo, brief, copy_payload, track_id))
+        return "job-1"
+
+    copy = _stub_motion_ad(monkeypatch, tmp_path, generate=_generate)
+
+    worker.render_item(db, item.id, notify=lambda m: None)
+
+    db.refresh(item)
+    assert item.status == "in_review"
+    assert item.media_path.startswith("stored/")
+    assert item.aivdo_job_id == "job-1"
+    # Constraint 1: generate_ad must receive the CAPPED payload the
+    # banned-words gate actually checked, never the raw AdCopy fields.
+    assert calls[0][2] == copy.as_payload()
+    assert calls[0][3] in ("inspiration", "advertime")
+
+
+def test_job_id_is_persisted_before_polling(db, tmp_path, monkeypatch):
+    """The 5 credits are spent the moment generate returns.
+
+    If we only saved the id after a successful poll, a crash mid-poll would
+    lose it -- and the retry would generate a second ad and pay again.
+
+    This must observe ORDERING directly, not infer it from what a query can
+    see. `db` here is the very same Session `_render_motion_ad` writes
+    through, and SQLAlchemy's default `expire_on_commit=True` only expires
+    attributes on ITS OWN commit -- it does not stop the identity map from
+    handing back a pending in-memory value to `db.get(...)` regardless of
+    whether a commit happened first. So a `db.get()` read from inside the
+    poll stub would return "job-2" even if the interim `session.commit()`
+    were deleted entirely and only the trailing `finally: session.commit()`
+    ran -- proving nothing. Wrapping `commit` and `poll` to append to a
+    shared, ordered event log is what actually distinguishes "committed,
+    then polled" from "polled, then committed at the end".
+    """
+    item = _motion_item(db)
+    events = []
+    real_commit = db.commit
+
+    def _tracked_commit():
+        # Captured at call time, not after: item.aivdo_job_id already holds
+        # whatever the worker assigned to it before calling commit().
+        events.append(f"commit:{item.aivdo_job_id}")
+        real_commit()
+
+    monkeypatch.setattr(db, "commit", _tracked_commit)
+
+    def _poll(job_id, timeout):
+        events.append(f"poll:{job_id}")
+        return "https://x/y.mp4"
+
+    _stub_motion_ad(monkeypatch, tmp_path,
+                    generate=lambda *a, **k: "job-2", poll=_poll)
+
+    worker.render_item(db, item.id, notify=lambda m: None)
+
+    assert "commit:job-2" in events, "the new job id must be committed at some point"
+    assert events.index("commit:job-2") < events.index("poll:job-2"), (
+        f"job id must be committed before polling, got order: {events}"
+    )
+
+
+def test_retry_resumes_an_existing_job_instead_of_paying_again(db, tmp_path, monkeypatch):
+    item = _motion_item(db, aivdo_job_id="job-existing")
+    calls = []
+
+    def _generate(*a, **k):
+        calls.append(a)
+        return "job-new"
+
+    _stub_motion_ad(monkeypatch, tmp_path, generate=_generate)
+
+    worker.render_item(db, item.id, notify=lambda m: None)
+
+    db.refresh(item)
+    assert calls == [], "an item with a job id must not dispatch a second ad"
+    assert item.aivdo_job_id == "job-existing"
+    assert item.status == "in_review"
+
+
+def test_terminal_job_failure_clears_the_job_id_so_render_can_start_over(db, tmp_path, monkeypatch):
+    """Once AIVDO itself reports a job as failed/canceled, resuming it can
+    only fail identically forever -- only a manual database edit would
+    otherwise recover the item. worker.py must clear aivdo_job_id in this
+    case so the operator's next press of Render dispatches a fresh job
+    through the normal UI instead."""
+    from app.video.aivdo import AivdoJobDeadError
+
+    item = _motion_item(db, aivdo_job_id="job-dead")
+    calls = []
+
+    def _poll(job_id, timeout):
+        raise AivdoJobDeadError(f"AIVDO job {job_id} failed: render blew up")
+
+    _stub_motion_ad(monkeypatch, tmp_path,
+                    generate=lambda *a, **k: calls.append(1) or "job-new",
+                    poll=_poll)
+    notes = []
+
+    worker.render_item(db, item.id, notify=notes.append)
+
+    db.refresh(item)
+    assert calls == [], "resuming a confirmed-dead job must not dispatch a new one itself"
+    assert item.status == "failed"
+    assert item.aivdo_job_id is None, "a confirmed-dead job id must be cleared, not left to resume forever"
+    assert "failed" in item.render_error
+    assert notes
+
+
+def test_unresolved_poll_failure_preserves_the_job_id_so_retry_resumes(db, tmp_path, monkeypatch):
+    """The opposite case from the terminal one above: a poll deadline (or
+    the publisher's stuck-render sweep marking the item failed without ever
+    calling poll() at all) does NOT mean the AIVDO job is dead -- it may
+    still be running or may already have finished. aivdo_job_id must
+    survive so the next Render press resumes it instead of paying for a
+    second job on top of one that might still complete."""
+    from app.video.aivdo import AivdoError
+
+    item = _motion_item(db, aivdo_job_id="job-unresolved")
+    calls = []
+
+    def _poll(job_id, timeout):
+        raise AivdoError(
+            f"AIVDO job {job_id} did not finish within {timeout}s "
+            "(last status='queued' stage='')")
+
+    _stub_motion_ad(monkeypatch, tmp_path,
+                    generate=lambda *a, **k: calls.append(1) or "job-new",
+                    poll=_poll)
+    notes = []
+
+    worker.render_item(db, item.id, notify=notes.append)
+
+    db.refresh(item)
+    assert calls == [], "an unresolved job must not be abandoned for a fresh dispatch"
+    assert item.status == "failed"
+    assert item.aivdo_job_id == "job-unresolved", (
+        "an unresolved job's id must survive a failure so a retry resumes it"
+    )
+    assert notes
+
+
+def test_banned_copy_fails_the_item_without_calling_aivdo(db, tmp_path, monkeypatch):
+    from app.video.ad_copy import BannedCopyError
+
+    item = _motion_item(db)
+    called = []
+    _stub_motion_ad(monkeypatch, tmp_path,
+                    generate=lambda *a, **k: called.append(1) or "job-x")
+
+    def _boom(topic, strategy):
+        raise BannedCopyError(["รับประกันสอบติด"])
+
+    monkeypatch.setattr(worker, "write_ad_copy", _boom)
+    notes = []
+
+    worker.render_item(db, item.id, notify=notes.append)
+
+    db.refresh(item)
+    assert item.status == "failed"
+    assert "รับประกันสอบติด" in item.render_error
+    assert called == [], "banned copy must never reach AIVDO -- it costs credits"
+    assert notes
+
+
+def test_out_of_credits_fails_the_item_and_preserves_the_message(db, tmp_path, monkeypatch):
+    """OutOfCreditsError isn't special-cased anywhere in worker.py -- it
+    goes through the same generic `except Exception` path as any other
+    AivdoError. What this test actually guarantees is that render_item
+    doesn't truncate, replace, or swallow the raised message on its way
+    into item.render_error and the notify call. (Whether AIVDO's out-of-
+    credits wording is itself distinct from other AIVDO errors is
+    test_aivdo.py's test_out_of_credits_is_its_own_error's job, not this
+    one's.)"""
+    from app.video.aivdo import OutOfCreditsError
+
+    item = _motion_item(db)
+    message = "AIVDO is out of credits: Need 5."
+
+    def _broke(*a, **k):
+        raise OutOfCreditsError(message)
+
+    _stub_motion_ad(monkeypatch, tmp_path, generate=_broke)
+    notes = []
+
+    worker.render_item(db, item.id, notify=notes.append)
+
+    db.refresh(item)
+    assert item.status == "failed"
+    assert item.render_error == message
+    assert any(message in n for n in notes)

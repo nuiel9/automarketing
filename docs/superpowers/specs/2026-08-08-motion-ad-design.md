@@ -84,9 +84,10 @@ keeps the demo account's credentials out of this path entirely and avoids the
 goal-accumulation side effect that the `demo` scenario has on the production
 account.
 
-Default target: `https://eduverse.one/th`, viewport 540×528 at
+Default target: `https://eduverse.one/th`, viewport 540×540 at
 `device_scale_factor=2`, `wait_until="networkidle"` plus a settle delay, giving
-a ~1080×1056 PNG.
+a 1080×1080 PNG. Production never passes `side` to `capture()`, so this is
+always the actual capture size, not just the default.
 
 ## The copy
 
@@ -136,14 +137,22 @@ into the budget.
 `{job_id, status, progress, current_stage, message, output_url, error}`.
 Statuses observed and in source: `queued` → `running` → `completed`, plus
 `failed` and `retrying`; the terminal set is `{completed, failed, canceled}`.
-Poll every 10s up to `aivdo_poll_timeout` (default 15 minutes — a healthy
-render takes ~2).
+Poll every 10s up to `aivdo_poll_timeout` (default 600s / 10 minutes — a
+healthy render takes ~2. Deliberately below the render Cloud Run job's
+`--task-timeout=15m`, so poll()'s own timeout error fires before the task
+is killed).
 
 **Fetch** — `output_url` is a **GCS v4 signed URL** on `storage.googleapis.com`
 (7-day expiry free tier, 30-day paid), fetchable with a plain GET and no
 credentials. Verified live: `200 video/mp4`. Download it and re-upload through
 our own `MediaStore` so the item's media does not depend on someone else's
 signed URL expiring.
+
+Retrying a dispatch is only safe when the request provably was not
+processed. `httpx.ConnectError`/`ConnectTimeout` prove that; `ReadTimeout`
+does not — the POST was fully sent, so AIVDO may already have deducted 5
+credits and created the job. Retrying those spends credits again AND
+strands jobs whose ids were never persisted.
 
 ## Not spending credits twice
 
@@ -152,12 +161,22 @@ fails**. Once the Celery task is queued, a crash on our side costs 5 credits
 regardless. Two consequences shape the design:
 
 1. **Persist `aivdo_job_id` on the item, committed before polling begins.** If
-   our render job dies mid-poll, a retry resumes polling the existing job
+   our render job dies mid-poll and the job's fate is still unknown (a poll
+   deadline, a killed process), a retry resumes polling the existing job
    instead of generating a new one. This is the only change requiring a
-   **migration** (`content_items.aivdo_job_id`, nullable string).
-2. The publisher's existing 20-minute stuck-render sweep would otherwise
-   re-dispatch a `motion_ad` render and spend another 5 credits. With the
-   job id persisted, the re-dispatch resumes.
+   **migration** (`content_items.aivdo_job_id`, nullable string). The
+   exception: once AIVDO itself reports the job terminally `failed` or
+   `canceled`, `worker.py` clears `aivdo_job_id` rather than leaving it to
+   resume -- a confirmed-dead job can only fail identically forever, so the
+   next Render press dispatches a fresh one instead.
+2. The publisher's existing 20-minute stuck-render sweep does **not**
+   re-dispatch anything -- `run_tick` (`backend/app/publisher.py`, around
+   line 163) marks a `rendering` item that's been stuck past
+   `RENDER_MAX_AGE` as `failed`, sets `render_error = "render timed out"`,
+   and sends a LINE alert. It never calls AIVDO. What the persisted job id
+   buys is downstream of that: the *next* time the item is rendered (an
+   operator pressing Render again), that render resumes the existing job
+   instead of paying for a new one.
 
 Known AIVDO-side gap that motivates our own timeout: `sweep_stalled_jobs`
 selects only `Job.status == "running"`, so a job that dies before the
@@ -193,9 +212,11 @@ All failures follow the existing path: set `item.render_error`, transition to
 | `400` moderation | Fail with AIVDO's `Content blocked: {category}` detail. No credits spent (AIVDO moderates before deducting). |
 | `402` | Out of credits. Message states how many are needed. Distinct wording so the founder can top up. |
 | `429` | Retry with backoff inside the client (limit is 5/min). |
-| `5xx` / network | Retry with backoff; fail after exhausting attempts. |
+| `503` | Retry — AIVDO returns 503 only from its "could not queue; credits refunded" path, so nothing was spent. |
+| Other `5xx`, or a network error **after** the request was sent | **Do not retry.** Fail saying a job may exist and credits may already be spent. |
+| Connection-phase network error | Retry with backoff — the request never reached the server. |
 | Poll timeout | Fail with elapsed time and the last-seen `status`/`current_stage`. Job id is persisted, so a retry resumes. |
-| Terminal `failed`/`canceled` | Fail with AIVDO's `error` text. |
+| Terminal `failed`/`canceled` | Fail with AIVDO's `error` text. Job id is cleared (not persisted for resume) -- the dead job's id still survives inside `render_error` if an operator needs to look it up on AIVDO, but a retry starts a fresh job rather than re-polling one that can only fail the same way again. |
 
 ## Settings
 
@@ -205,7 +226,7 @@ All failures follow the existing path: set `item.render_error`, transition to
 | `aivdo_base_url` | `https://aivdo-api-b7iz53omoq-as.a.run.app` | |
 | `aivdo_style` | `blueprint` | AIVDO's education/courses template |
 | `aivdo_voice` | `Charon` | Kavee's voice |
-| `aivdo_poll_timeout` | `900` | Seconds |
+| `aivdo_poll_timeout` | `600` | Seconds |
 | `ad_shot_url` | `https://eduverse.one/th` | Public page, no login |
 
 `motion_ad` joins `RENDERABLE_FORMATS`. The `format` column is

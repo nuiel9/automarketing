@@ -35,6 +35,12 @@ music:
   demo:
     - inspiration
     - emotional-piano
+  # motion_ad track IDs are passed to AIVDO, which builds the bed itself --
+  # these are NOT downloaded by render/fetch_music.py and must not be added
+  # to its fetch list, or the image grows with files nothing reads.
+  motion_ad:
+    - inspiration
+    - advertime
   # Absolute loudness the bed is normalised to BEFORE mixing under the
   # narration (AIVDO's Motion Ad value). Moving this toward -24 starts
   # burying the voiceover.
