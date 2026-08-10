@@ -21,7 +21,15 @@ export type Item = {
 
 const CHANNELS = ["tiktok", "youtube", "instagram", "facebook", "x", "line"];
 
-export default function ItemCard({ item, onChanged }: { item: Item; onChanged: () => void }) {
+export default function ItemCard({
+  item,
+  onChanged,
+}: {
+  item: Item;
+  // `nextTab` moves the queue to the tab where the item just landed -- an
+  // action that changes an item's status moves it out of the current list.
+  onChanged: (nextTab?: string) => void;
+}) {
   const [captions, setCaptions] = useState<Caption[]>(item.captions);
   const [when, setWhen] = useState("");
   const [channels, setChannels] = useState<string[]>(["facebook", "instagram", "x", "line"]);
@@ -33,9 +41,9 @@ export default function ItemCard({ item, onChanged }: { item: Item; onChanged: (
     Object.fromEntries(item.captions.map((c) => [c.channel, c.body]))
   );
 
-  const act = async (fn: () => Promise<unknown>) => {
+  const act = async (fn: () => Promise<unknown>, nextTab?: string) => {
     setBusy(true); setError("");
-    try { await fn(); onChanged(); } catch (e) { setError(String(e)); }
+    try { await fn(); onChanged(nextTab); } catch (e) { setError(String(e)); }
     setBusy(false);
   };
 
@@ -116,14 +124,16 @@ export default function ItemCard({ item, onChanged }: { item: Item; onChanged: (
               disabled={busy || (fmt === "demo" && !scenario)}
               className="rounded bg-indigo-600 px-3 py-2 text-sm text-white disabled:opacity-40"
               onClick={() =>
-                act(() =>
-                  apiFetch(`/api/items/${item.id}/render`, {
-                    method: "POST",
-                    body: JSON.stringify({
-                      format: fmt,
-                      scenario: fmt === "demo" ? scenario : null,
+                act(
+                  () =>
+                    apiFetch(`/api/items/${item.id}/render`, {
+                      method: "POST",
+                      body: JSON.stringify({
+                        format: fmt,
+                        scenario: fmt === "demo" ? scenario : null,
+                      }),
                     }),
-                  })
+                  "rendering"
                 )
               }
             >
@@ -165,14 +175,16 @@ export default function ItemCard({ item, onChanged }: { item: Item; onChanged: (
               disabled={busy || !when || channels.length === 0}
               className="rounded bg-green-600 px-3 py-2 text-sm text-white disabled:opacity-40"
               onClick={() =>
-                act(() =>
-                  apiFetch(`/api/items/${item.id}/approve`, {
-                    method: "POST",
-                    body: JSON.stringify({
-                      scheduled_at: new Date(when).toISOString(),
-                      channels,
+                act(
+                  () =>
+                    apiFetch(`/api/items/${item.id}/approve`, {
+                      method: "POST",
+                      body: JSON.stringify({
+                        scheduled_at: new Date(when).toISOString(),
+                        channels,
+                      }),
                     }),
-                  })
+                  "scheduled"
                 )
               }
             >
@@ -182,11 +194,13 @@ export default function ItemCard({ item, onChanged }: { item: Item; onChanged: (
               disabled={busy}
               className="rounded bg-red-600 px-3 py-2 text-sm text-white disabled:opacity-40"
               onClick={() =>
-                act(() =>
-                  apiFetch(`/api/items/${item.id}/reject`, {
-                    method: "POST",
-                    body: JSON.stringify({ reason: "rejected in review" }),
-                  })
+                act(
+                  () =>
+                    apiFetch(`/api/items/${item.id}/reject`, {
+                      method: "POST",
+                      body: JSON.stringify({ reason: "rejected in review" }),
+                    }),
+                  "rejected"
                 )
               }
             >
@@ -199,7 +213,9 @@ export default function ItemCard({ item, onChanged }: { item: Item; onChanged: (
         <button
           disabled={busy}
           className="rounded bg-amber-600 px-3 py-2 text-sm text-white"
-          onClick={() => act(() => apiFetch(`/api/items/${item.id}/retry`, { method: "POST" }))}
+          onClick={() =>
+            act(() => apiFetch(`/api/items/${item.id}/retry`, { method: "POST" }), "scheduled")
+          }
         >
           ลองใหม่
         </button>
@@ -208,7 +224,12 @@ export default function ItemCard({ item, onChanged }: { item: Item; onChanged: (
         <button
           disabled={busy}
           className="rounded bg-amber-600 px-3 py-2 text-sm text-white"
-          onClick={() => act(() => apiFetch(`/api/items/${item.id}/captions`, { method: "POST" }))}
+          onClick={() =>
+            act(
+              () => apiFetch(`/api/items/${item.id}/captions`, { method: "POST" }),
+              "in_review"
+            )
+          }
         >
           สร้างแคปชันใหม่
         </button>
