@@ -12,7 +12,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title="AutoMarketing")
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[settings.frontend_origin],
+        allow_origins=settings.origins(),
         allow_methods=["*"],
         allow_headers=["*"],
     )

@@ -72,6 +72,14 @@ class Settings(BaseSettings):
     def channels(self) -> list[str]:
         return [c.strip() for c in self.enabled_channels.split(",") if c.strip()]
 
+    def origins(self) -> list[str]:
+        # Comma-separated, like channels() above. Cloud Run answers a service
+        # on TWO hostnames (legacy short + project-numbered), so a deployment
+        # that allows only the one it was configured with breaks the moment
+        # the operator opens the other -- and it breaks as a CORS preflight
+        # 400, which looks nothing like a CORS problem from the browser.
+        return [o.strip() for o in self.frontend_origin.split(",") if o.strip()]
+
 
 @lru_cache
 def get_settings() -> Settings:

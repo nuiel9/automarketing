@@ -98,6 +98,53 @@ def test_render_switching_away_from_motion_ad_clears_the_stale_job_id(client_wit
     assert item.aivdo_job_id is None
 
 
+def test_render_switching_away_from_motion_ad_reports_the_job_it_orphans(
+    client_with_db, db, fake_dispatch, monkeypatch
+):
+    # Clearing the id is correct (see the test above) -- but it is only still
+    # set here because worker.py never confirmed the job dead, which means
+    # AIVDO may still be holding a live job whose 5 credits are already spent.
+    # Those credits are unrecoverable: AIVDO refunds only when *dispatch*
+    # fails, and its sweep_stalled_jobs selects status == "running", so a job
+    # that died before that write sits at "queued" forever. Dropping the id
+    # silently makes a paid job both unrecoverable and invisible; the operator
+    # has to be told, because nothing else will ever mention it again.
+    notes = []
+    monkeypatch.setattr(items_api, "line_notify", notes.append)
+    item = ContentItem(slug="w33-orphan", topic="t", status="failed",
+                       format="motion_ad", aivdo_job_id="job-paid")
+    db.add(item); db.commit()
+
+    resp = client_with_db.post(
+        f"/api/items/{item.id}/render", json={"format": "tips"}, headers=AUTH
+    )
+
+    assert resp.status_code == 200
+    # The id itself must be in the alert -- it is the only handle anyone has
+    # for asking AIVDO what happened to those credits.
+    assert any("job-paid" in n for n in notes), notes
+
+
+def test_render_format_switch_is_silent_when_no_job_was_paid_for(
+    client_with_db, db, fake_dispatch, monkeypatch
+):
+    # The common case is switching format on an item that never rendered a
+    # motion_ad. Alerting there would train the founder to ignore the alert
+    # that matters.
+    notes = []
+    monkeypatch.setattr(items_api, "line_notify", notes.append)
+    item = ContentItem(slug="w33-no-job", topic="t", status="failed",
+                       format="demo", aivdo_job_id=None)
+    db.add(item); db.commit()
+
+    resp = client_with_db.post(
+        f"/api/items/{item.id}/render", json={"format": "tips"}, headers=AUTH
+    )
+
+    assert resp.status_code == 200
+    assert notes == []
+
+
 def test_render_motion_ad_again_leaves_an_existing_job_id_alone(client_with_db, db, fake_dispatch):
     # Re-requesting motion_ad on an item that still has a job id must not
     # clear it here -- worker.py's resume-instead-of-recharge logic depends
@@ -183,6 +230,38 @@ def test_dispatch_failure_marks_item_failed_and_notifies(client_with_db, db, mon
     assert got["status"] == "failed"
     assert got["render_error"] and "cloud run unavailable" in got["render_error"]
     assert notes
+
+
+def test_orphan_alert_survives_a_dispatch_failure_on_the_same_request(
+    client_with_db, db, monkeypatch
+):
+    # The two alerting paths added here meet only in this combination: the
+    # orphan alert fires after the first commit, then dispatch blows up and
+    # the handler commits again on its way to a 502. Worth pinning because
+    # the first commit expires the instance (sessionmaker defaults to
+    # expire_on_commit=True), so both alerts read attributes off a refreshed
+    # row -- and because losing the orphan alert to an unrelated dispatch
+    # failure would silently drop the only record of spent credits.
+    item = ContentItem(slug="w33-orphan-boom", topic="t", status="failed",
+                       format="motion_ad", aivdo_job_id="job-paid")
+    db.add(item); db.commit()
+
+    class BoomDispatcher:
+        def dispatch(self, item_id):
+            raise RuntimeError("cloud run unavailable")
+
+    monkeypatch.setattr(items_api, "get_dispatcher", lambda s: BoomDispatcher())
+    notes = []
+    monkeypatch.setattr(items_api, "line_notify", notes.append)
+
+    resp = client_with_db.post(
+        f"/api/items/{item.id}/render", json={"format": "tips"}, headers=AUTH
+    )
+
+    assert resp.status_code == 502
+    # Both, not either: they report different problems to the same operator.
+    assert any("job-paid" in n for n in notes), notes
+    assert any("cloud run unavailable" in n for n in notes), notes
 
 
 def _durable_client(tmp_path, db_name):

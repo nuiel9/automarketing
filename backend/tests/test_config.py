@@ -35,6 +35,24 @@ def test_aivdo_settings_have_production_defaults():
     assert s.aivdo_api_key == ""
 
 
+def test_frontend_origin_accepts_more_than_one_origin():
+    # Cloud Run gives a service TWO hostnames -- a legacy short one and a
+    # project-numbered one -- and the Cloud Console shows the second while
+    # this deployment was configured with the first. Allowing only one origin
+    # means browsing the other fails every request at preflight, which
+    # presents to the operator as "my admin token doesn't work" (login only
+    # writes localStorage, so it appears to succeed either way).
+    s = Settings(_env_file=None, frontend_origin="https://a.example, https://b.example")
+    assert s.origins() == ["https://a.example", "https://b.example"]
+
+
+def test_a_single_frontend_origin_still_works():
+    # The deployed config passes exactly one origin; parsing must not change
+    # what that means.
+    s = Settings(_env_file=None, frontend_origin="https://a.example")
+    assert s.origins() == ["https://a.example"]
+
+
 def test_motion_ad_is_a_renderable_format():
     from app.api.items import RENDERABLE_FORMATS
     from app.models import ContentItem
