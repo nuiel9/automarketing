@@ -232,6 +232,38 @@ def test_dispatch_failure_marks_item_failed_and_notifies(client_with_db, db, mon
     assert notes
 
 
+def test_orphan_alert_survives_a_dispatch_failure_on_the_same_request(
+    client_with_db, db, monkeypatch
+):
+    # The two alerting paths added here meet only in this combination: the
+    # orphan alert fires after the first commit, then dispatch blows up and
+    # the handler commits again on its way to a 502. Worth pinning because
+    # the first commit expires the instance (sessionmaker defaults to
+    # expire_on_commit=True), so both alerts read attributes off a refreshed
+    # row -- and because losing the orphan alert to an unrelated dispatch
+    # failure would silently drop the only record of spent credits.
+    item = ContentItem(slug="w33-orphan-boom", topic="t", status="failed",
+                       format="motion_ad", aivdo_job_id="job-paid")
+    db.add(item); db.commit()
+
+    class BoomDispatcher:
+        def dispatch(self, item_id):
+            raise RuntimeError("cloud run unavailable")
+
+    monkeypatch.setattr(items_api, "get_dispatcher", lambda s: BoomDispatcher())
+    notes = []
+    monkeypatch.setattr(items_api, "line_notify", notes.append)
+
+    resp = client_with_db.post(
+        f"/api/items/{item.id}/render", json={"format": "tips"}, headers=AUTH
+    )
+
+    assert resp.status_code == 502
+    # Both, not either: they report different problems to the same operator.
+    assert any("job-paid" in n for n in notes), notes
+    assert any("cloud run unavailable" in n for n in notes), notes
+
+
 def _durable_client(tmp_path, db_name):
     # Mirrors app/db.py's production get_session generator (commit-after-
     # yield) on a file-backed sqlite engine -- unlike client_with_db (a
