@@ -98,6 +98,53 @@ def test_render_switching_away_from_motion_ad_clears_the_stale_job_id(client_wit
     assert item.aivdo_job_id is None
 
 
+def test_render_switching_away_from_motion_ad_reports_the_job_it_orphans(
+    client_with_db, db, fake_dispatch, monkeypatch
+):
+    # Clearing the id is correct (see the test above) -- but it is only still
+    # set here because worker.py never confirmed the job dead, which means
+    # AIVDO may still be holding a live job whose 5 credits are already spent.
+    # Those credits are unrecoverable: AIVDO refunds only when *dispatch*
+    # fails, and its sweep_stalled_jobs selects status == "running", so a job
+    # that died before that write sits at "queued" forever. Dropping the id
+    # silently makes a paid job both unrecoverable and invisible; the operator
+    # has to be told, because nothing else will ever mention it again.
+    notes = []
+    monkeypatch.setattr(items_api, "line_notify", notes.append)
+    item = ContentItem(slug="w33-orphan", topic="t", status="failed",
+                       format="motion_ad", aivdo_job_id="job-paid")
+    db.add(item); db.commit()
+
+    resp = client_with_db.post(
+        f"/api/items/{item.id}/render", json={"format": "tips"}, headers=AUTH
+    )
+
+    assert resp.status_code == 200
+    # The id itself must be in the alert -- it is the only handle anyone has
+    # for asking AIVDO what happened to those credits.
+    assert any("job-paid" in n for n in notes), notes
+
+
+def test_render_format_switch_is_silent_when_no_job_was_paid_for(
+    client_with_db, db, fake_dispatch, monkeypatch
+):
+    # The common case is switching format on an item that never rendered a
+    # motion_ad. Alerting there would train the founder to ignore the alert
+    # that matters.
+    notes = []
+    monkeypatch.setattr(items_api, "line_notify", notes.append)
+    item = ContentItem(slug="w33-no-job", topic="t", status="failed",
+                       format="demo", aivdo_job_id=None)
+    db.add(item); db.commit()
+
+    resp = client_with_db.post(
+        f"/api/items/{item.id}/render", json={"format": "tips"}, headers=AUTH
+    )
+
+    assert resp.status_code == 200
+    assert notes == []
+
+
 def test_render_motion_ad_again_leaves_an_existing_job_id_alone(client_with_db, db, fake_dispatch):
     # Re-requesting motion_ad on an item that still has a job id must not
     # clear it here -- worker.py's resume-instead-of-recharge logic depends

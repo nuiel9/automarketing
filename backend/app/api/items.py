@@ -290,6 +290,7 @@ def render(item_id: str, body: RenderBody, session: Session = Depends(get_sessio
         transition(item, "rendering")
     except InvalidTransition as exc:
         raise HTTPException(409, str(exc))
+    orphaned_job_id = None
     if body.format != "motion_ad":
         # A stale AIVDO job id from a previous motion_ad lifetime must not
         # survive a switch to another format -- if this item is ever
@@ -298,6 +299,16 @@ def render(item_id: str, body: RenderBody, session: Session = Depends(get_sessio
         # A motion_ad -> motion_ad re-render intentionally leaves this
         # alone: that's what lets a resume avoid paying again, and a
         # confirmed-dead job's id is already cleared by worker.py itself.
+        #
+        # Which is exactly why a still-set id here is worth an alert: it
+        # means the job was never confirmed dead, so AIVDO may still hold a
+        # live one whose 5 credits are already spent. Those credits cannot
+        # be recovered -- AIVDO refunds only when *dispatch* fails, and its
+        # sweep_stalled_jobs selects status == "running", so a job that died
+        # before that write sits at "queued" forever. Clearing the id is
+        # still correct; doing it silently is not, because this alert
+        # becomes the only surviving record of the job id.
+        orphaned_job_id = item.aivdo_job_id
         item.aivdo_job_id = None
     item.format = body.format
     item.scenario = body.scenario
@@ -310,6 +321,13 @@ def render(item_id: str, body: RenderBody, session: Session = Depends(get_sessio
     # watching it. Committing makes the transition durable before dispatch,
     # regardless of what the dispatcher does next.
     session.commit()
+    if orphaned_job_id:
+        # After the commit, not before: only alert about a job the format
+        # switch actually dropped.
+        line_notify(
+            f"[AutoMarketing] {item.slug}: switched to {body.format}, dropping AIVDO "
+            f"job {orphaned_job_id} — its 5 credits are spent and cannot be refunded"
+        )
     try:
         get_dispatcher(get_settings()).dispatch(item.id)
     except Exception as exc:
