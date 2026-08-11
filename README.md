@@ -56,6 +56,19 @@ both Docker images, Cloud Build, Cloud SQL, non-public GCS media bucket, Secret 
 and the 5-minute publisher tick via Cloud Scheduler. The smoke test requires a working
 `GEMINI_API_KEY`.
 
+Live in `eduverse-personal-krainat` / `asia-southeast1`. Backend **`00011-lbv`**
+(2026-08-11), 100% of traffic, `/health` ok. Channels enabled: `dryrun`, `line`,
+`facebook`.
+
+⚠️ `FRONTEND_ORIGIN` is **comma-separated** and must list *both* Cloud Run
+hostnames for a service — the legacy `-b7iz53omoq-as.a.run.app` form and the
+project-numbered `-614726286728.asia-southeast1.run.app` form the Cloud Console
+shows. With only one, browsing the other fails every API call at CORS preflight
+with a bare 400, which presents as *"my admin token doesn't work"* because login
+only writes localStorage and redirects. Set it with `--update-env-vars` and the
+`^##^` delimiter — the value contains a comma, and `--set-env-vars` would drop
+every other variable.
+
 ## Documents
 
 | Doc | What it is |
@@ -64,10 +77,14 @@ and the 5-minute publisher tick via Cloud Scheduler. The smoke test requires a w
 | [`docs/superpowers/plans/2026-08-05-automarketing-phase1-spine.md`](docs/superpowers/plans/2026-08-05-automarketing-phase1-spine.md) | Phase 1 implementation plan |
 | [`docs/PLATFORM_SETUP.md`](docs/PLATFORM_SETUP.md) | Founder checklist: tokens + audit applications |
 | [`docs/DEPLOY.md`](docs/DEPLOY.md) | Cloud Run deploy runbook |
+| [`docs/MOTION_AD.md`](docs/MOTION_AD.md) | The `motion_ad` format — 11s branded spots via AIVDO |
+| [`docs/MUSIC.md`](docs/MUSIC.md) | CC0 music beds, baked into the render image at build time |
+| [`docs/FACEBOOK_ADS.md`](docs/FACEBOOK_ADS.md) | Ad creative, App Review state, and the campaign-one plan |
+| [`docs/research-meta-2026.md`](docs/research-meta-2026.md) | Meta ads mechanics, split by evidence strength |
 
 ## Roadmap
 
-- **Phase 1 — Spine** ✅ multi-channel auto-posting with review queue (this release)
-- **Phase 2 — Video Factory**: auto-rendered product demos + tips cards, Kavee TTS voiceover, YouTube/TikTok adapters
+- **Phase 1 — Spine** ✅ multi-channel auto-posting with review queue
+- **Phase 2 — Video Factory** ✅ auto-rendered `demo` walkthroughs + `tips` cards, Kavee TTS voiceover, CC0 music beds, and the 11-second `motion_ad` via AIVDO
 - **Phase 3 — Content Brain + Attribution**: weekly AI content planning from `strategy.yaml`; views → clicks → signups → activated → D7 funnel per channel; weekly LINE digest
 - **Phase 4 — Autopilot extras**: AI avatar presenter, social-proof clips, full auto-post once platform audits clear

@@ -6,3 +6,6 @@ node_modules/
 *.egg-info/
 .pytest_cache/
 .venv/
+
+# macOS
+.DS_Store
