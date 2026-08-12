@@ -418,9 +418,31 @@ reads (99−34)/(7,071−4,011) = **~2.12%**, above the ~1.71% traffic and ~1.80
 education benchmarks. ฿183.31 spent, 99 link clicks, 79 landing page views at
 ฿2.32.
 
-🔑 **Still zero signups, so the problem has relocated rather than resolved.** At
-~2.1% CTR the ad is no longer the bottleneck; everything after the click is —
-and that span is unmeasured until CAPI ships.
+✅ **FIRST PAID SIGNUP CONFIRMED, 2026-08-12.** Traced end to end from Cloud Run
+request logs: ad click on `/th/goals?…utm_campaign=w33-ad-ai` at 11:50:50 UTC →
+`POST /api/auth/google` 200 from the same IP at 11:59:40 (+8 min) → a new
+account created that day, Thai locale, Google auth, holding its untouched
+30-credit starter grant. That IP had no history in the prior 14 days. **฿183 and
+three days in, the campaign has produced a user.**
+
+⚠️ **But the funnel now stalls one step later.** That user made **no
+`POST /api/counselor/goals`**, and the 30 credits still sitting untouched prove
+no course was generated — creating one costs ~10–12. So the shape is now
+**ad → landing → signup ✅ → goal ❌**, which reproduces the v0.86 finding
+(*"they registered and did NOTHING"*) despite the v0.87 fix.
+
+The suspected mechanism, handed to eduverse-one (§3b of
+`docs/handoff-meta-conversions-api-2026-08-11.md`): v0.87 restores the typed
+goal into an **open form**, but the visitor must press submit a *second* time,
+and a form that already looks filled gives no reason to. N=1 — a hypothesis
+worth a cheap fix, not an established cause.
+
+🔑 **At ~2.1% CTR the ad is no longer the bottleneck; everything after the click
+is.** Conversion measurement is no longer the gap either — eduverse-one shipped
+`utm_source`/`utm_medium`/`utm_campaign` on the user row plus an admin card
+(`bca9cf0`), deployed **11:49 UTC, 103 seconds before that ad click**. Signups
+now carry their campaign tag natively, so this correlation will not need
+repeating.
 
 ⚠️ **Placements were over-weighted here, and one claim in §8 was wrong.**
 `facebook_reels_overlay` (4,069 of ~7,071 impressions, the largest single
