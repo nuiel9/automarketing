@@ -375,6 +375,31 @@ Ads Manager.
    image.
 6. **Publish.** Meta reviews in roughly 24h.
 
+### Result so far (2026-08-11, day 2)
+
+✅ **The ad-level fixes worked.** Day-1 CTR was **0.85%** (34 clicks / 4,011
+views) — half benchmark. After changing the CTA to **Sign up**, the headline to
+`ใช้ AI ช่วยงานให้เป็น`, and the URL to `/th/goals`, the **incremental** slice
+reads (99−34)/(7,071−4,011) = **~2.12%**, above the ~1.71% traffic and ~1.80%
+education benchmarks. ฿183.31 spent, 99 link clicks, 79 landing page views at
+฿2.32.
+
+🔑 **Still zero signups, so the problem has relocated rather than resolved.** At
+~2.1% CTR the ad is no longer the bottleneck; everything after the click is —
+and that span is unmeasured until CAPI ships.
+
+⚠️ **Placements were over-weighted here, and one claim in §8 was wrong.**
+`facebook_reels_overlay` (4,069 of ~7,071 impressions, the largest single
+placement) is a **banner overlaid on someone else's Reel, not a full-screen 9:16
+takeover** — a 1:1 image is fine there, so the letterboxing argument never
+applied to it. Only full-screen Reels and Stories were a genuine mismatch. CTR
+rose *while delivery was still Reels-heavy*, so the placement restriction is not
+what fixed this.
+
+⏳ The 08-11 breakdown still showed ~92% Reels/Stories vs ~6% Feed, but that view
+is **cumulative across both days** and the restriction published only partway
+through 08-11. Filter to a single day before concluding it did or didn't apply.
+
 ### Reading the result after 7 days
 
 Compare the two ads first — that is what the campaign was built to tell you.
