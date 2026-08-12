@@ -425,17 +425,33 @@ account created that day, Thai locale, Google auth, holding its untouched
 30-credit starter grant. That IP had no history in the prior 14 days. **฿183 and
 three days in, the campaign has produced a user.**
 
-⚠️ **But the funnel now stalls one step later.** That user made **no
-`POST /api/counselor/goals`**, and the 30 credits still sitting untouched prove
-no course was generated — creating one costs ~10–12. So the shape is now
-**ad → landing → signup ✅ → goal ❌**, which reproduces the v0.86 finding
-(*"they registered and did NOTHING"*) despite the v0.87 fix.
+✅ **SECOND SIGNUP THE SAME DAY, AND IT ACTIVATED.** Landed on `/th/goals` from
+the ad at 14:38:14 UTC — first request ever from that IP, and **proven by the
+`referer`** carrying the full `utm_campaign=w33-ad-ai&fbclid=…`, so no IP
+correlation was needed. Then `POST /api/auth/register` **201** at 14:40:15,
+`POST /api/courses/generate` **202** at 14:47:13 (the `-8 course_generation` on
+the ledger), and two `/th/lessons/…` pages by 14:49. **Click → signup → course →
+lessons in eleven minutes.** The funnel completes end to end.
 
-The suspected mechanism, handed to eduverse-one (§3b of
-`docs/handoff-meta-conversions-api-2026-08-11.md`): v0.87 restores the typed
-goal into an **open form**, but the visitor must press submit a *second* time,
-and a form that already looks filled gives no reason to. N=1 — a hypothesis
-worth a cheap fix, not an established cause.
+⚠️ **But neither converted user touched the goal box.**
+
+| | Landed on | Used the goal box? | Outcome |
+|---|---|---|---|
+| User 1 (google) | `/th/goals` | no | signed up, did nothing |
+| User 2 (email) | `/th/goals` | **no — left within 1s** | course + lessons ✅ |
+
+**Two for two: paid traffic lands on the goal page and does not use it.** A third
+session at 03:38 UTC submitted the goal signed-out, took the v0.87 redirect, and
+never registered.
+
+The ad promises *"บอกพี่กวีตรง ๆ… แล้วจะได้แผนเป็นข้อ ๆ"*, and both people who
+actually acted went and created a course directly instead. So the restored-draft
+friction handed to eduverse-one (§3b) is probably under-stated — the larger
+question is whether the goal box is the right first surface for cold traffic at
+all.
+
+**N=2 conversions, 3 relevant sessions — suggestive, not conclusive.** Do not
+change the ad's landing page mid-test; note it for campaign two.
 
 🔑 **At ~2.1% CTR the ad is no longer the bottleneck; everything after the click
 is.** Conversion measurement is no longer the gap either — eduverse-one shipped
