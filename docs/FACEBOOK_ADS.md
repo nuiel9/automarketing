@@ -293,9 +293,13 @@ Correlate on IP within a short window. Three things this method needs stated:
 which is ordinary operational use — but do not build a persistent identity table
 from it without revisiting the PDPA position in §2.
 
-🔑 **`fbclid` is present in the logged URLs.** That is the ad-click identifier
-CAPI needs to attribute a conversion back to the click, and it confirms the
-approach recommended in the CAPI handoff is viable from data you already hold.
+🔑 **`fbclid` is present in the logged URLs** — and in the `referer` chain, so
+confirmed twice. That is the ad-click identifier CAPI needs to attribute a
+conversion back to a click, and it proves the signal exists in data already held.
+
+**It is deliberately not captured.** Maintainer decision: no ad-click identifier
+stored per user until CAPI exists to use it. Not an oversight, not an open task
+— revisit only when CAPI is being built.
 
 ### The creative
 
@@ -452,6 +456,28 @@ all.
 
 **N=2 conversions, 3 relevant sessions — suggestive, not conclusive.** Do not
 change the ad's landing page mid-test; note it for campaign two.
+
+⚠️ **Do NOT read the admin "signups by source" card as campaign evidence yet.**
+It currently shows every signup under **`direct`**, and that is a measurement
+artifact, not a result: the `utm_*` columns only exist from **11:40 UTC on
+08-12**, so every earlier row is *untagged*, not direct. The bucket conflates
+"arrived without a tag" with "we weren't measuring yet". The two paid signups
+above are the first rows that can carry real attribution. (Raised by the
+eduverse-one session, which built the card.)
+
+✅ **The v0.87 restored-draft friction is fixed** — `c16dbe7`, deployed backend
+`00186-sc8` / frontend `00161-qgf`. A restored draft now says
+*"เป้าหมายของคุณยังไม่ถูกบันทึก"* above the form instead of refilling silently.
+Auto-submit was **rejected outright**, correctly: `autostart_step1` defaults ON
+since v0.86, so an auto-submitted goal would generate step 1's course and spend
+~12 credits with nobody pressing anything — the exact silent charge the intake
+consent checkbox exists to prevent.
+
+⚠️ **A deeper flaw in that code remains open** (mine): `takeGoalDraft()` is
+read-and-clear, so **any** mount of the goals page destroys the draft — including
+simply navigating away before submitting, which is precisely what user 2 did
+within one second of landing. Fix is to consume on *successful submit* rather
+than on read. Handed to eduverse-one.
 
 🔑 **At ~2.1% CTR the ad is no longer the bottleneck; everything after the click
 is.** Conversion measurement is no longer the gap either — eduverse-one shipped
