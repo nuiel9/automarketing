@@ -258,10 +258,44 @@ pixel** — verified 2026-08-10, zero references to `connect.facebook.net` or
 spend the budget blind. Installing a pixel is the prerequisite for campaign two,
 and it's the single highest-value thing to add before spending more.
 
-⚠️ **Nothing on your side records the UTM links.** They're in the URLs and they
-cost nothing to carry, but eduverse-one's UTM capture is Phase 3 and unplanned.
-For campaign one your readable numbers are **Facebook's own**: CTR, cost per
-link click, and link clicks. Not signups.
+✅ **The UTM links ARE recorded — in Cloud Run request logs.** An earlier version
+of this doc said attribution was impossible without app-side capture. That was
+wrong, and it overlooked the obvious: the UTM is in the URL, so even though
+eduverse-one never parses it, **Cloud Logging captures the full query string**
+(`httpRequest.requestUrl`) with the client IP, retained ~30 days by default.
+
+Attribution is therefore available **retroactively, with no pixel and no CAPI**:
+
+```
+# ad clicks
+gcloud logging read 'resource.type="cloud_run_revision"
+  AND resource.labels.service_name="eduverse-one-frontend-staging"
+  AND httpRequest.requestUrl:"utm_campaign=w33-ad-ai"'   --project=eduverse-personal-krainat --freshness=3d   --format='value(timestamp, httpRequest.remoteIp)'
+
+# auth events, same window
+gcloud logging read 'resource.type="cloud_run_revision"
+  AND resource.labels.service_name="eduverse-one-backend-staging"
+  AND httpRequest.requestMethod="POST" AND httpRequest.requestUrl:"/api/auth/"'   --project=eduverse-personal-krainat --freshness=3d   --format='value(timestamp, httpRequest.requestUrl, httpRequest.remoteIp)'
+```
+
+Correlate on IP within a short window. Three things this method needs stated:
+
+- ⚠️ **~59% of ad-URL requests come from Meta's own IP range `2a03:2880:…`** —
+  prefetch and link-crawling, not people (296 of 500 over three days). Filter
+  them out or every count is inflated.
+- ⚠️ **`/api/auth/google` serves both signup and login**, so a match proves an
+  *auth event*, not necessarily a new account. Confirm against the user table.
+- ⚠️ **IP correlation under-counts.** Mobile clients change address between the
+  landing and the signup, so misses are expected; matches are meaningful,
+  absences are not.
+
+**IPs are personal data.** This is reading your own server logs for attribution,
+which is ordinary operational use — but do not build a persistent identity table
+from it without revisiting the PDPA position in §2.
+
+🔑 **`fbclid` is present in the logged URLs.** That is the ad-click identifier
+CAPI needs to attribute a conversion back to the click, and it confirms the
+approach recommended in the CAPI handoff is viable from data you already hold.
 
 ### The creative
 
