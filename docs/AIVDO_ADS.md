@@ -28,9 +28,33 @@ limit** with ~฿583 already spent. Two campaigns on one account share:
 - the billing threshold (bills at ฿8,000 or month end),
 - and the payment method.
 
-**Recommendation: don't start AIVDO before 08-17.** Running both means each
-starves the other's delivery and neither result is clean. Waiting four days
-costs nothing and buys an uncontaminated read.
+**DECIDED 2026-08-13: launch 08-14, in parallel with Eduverse's last four
+days.** An earlier version of this doc recommended waiting until 08-17. One
+argument in it was wrong and is worth correcting rather than deleting:
+
+⚠️ **Measurement is NOT contaminated by running both.** The two campaigns land
+on different domains with separate Cloud Run request logs and separate user
+tables, so attribution stays cleanly separated. The overlap is budget and
+delivery only.
+
+What running in parallel actually costs:
+
+- **~฿305/day combined** (Eduverse ฿155 + AIVDO ฿150) against the shared
+  ฿5,000 account spending limit. **Check the current counter before launch** —
+  when it is reached, *both* campaigns stop, not just the newer one.
+- **The ฿8,000 billing threshold arrives sooner.** Cash-flow timing, not a
+  performance issue.
+- **Auction overlap.** Both target broad Thailand with overlapping age bands, so
+  the same person can be eligible for both. Meta resolves same-advertiser
+  collisions by picking one and suppressing the other, which can under-deliver
+  whichever ad set it judges weaker. ⚠️ Stated from general knowledge — I could
+  not re-verify it against Meta's docs this session (the `meta-devtools` MCP had
+  disconnected). Worth confirming in the Help Center before drawing conclusions
+  from a low-delivery day.
+
+**Why the timing is defensible anyway:** Eduverse's read is largely in — CTR has
+settled at ~2.1% and both its conversions have landed. Four more days at ฿155
+buys little new information, so the delivery it loses to AIVDO is cheap.
 
 ## 2. What AIVDO is, from its own site
 
